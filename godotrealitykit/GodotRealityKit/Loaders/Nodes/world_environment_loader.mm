@@ -30,7 +30,7 @@ void WorldEnvironmentLoader::update_deps(
 
 	Base::update_deps(p_resource_loaders);
 
-	if (!get_scene_tree()->get_extension_settings().should_convert_worldenvironment()) {
+	if (!get_scene_tree()->get_extension_settings().should_convert_world_environment()) {
 		return;
 	}
 
@@ -69,24 +69,12 @@ void WorldEnvironmentLoader::update_deps(
 	skybox_deps.replace_changed(changed_skybox_deps, skyboxes);
 }
 
-void WorldEnvironmentLoader::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
-
-	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
-	SkyboxLoader *skyboxes = std::get<SkyboxLoader *>(p_resource_loaders);
-
-	Base::update(p_resource_loaders);
-
-	if (!get_scene_tree()->get_extension_settings().should_convert_worldenvironment()) {
+void WorldEnvironmentLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	if (!get_scene_tree()->get_extension_settings().should_convert_world_environment()) {
 		return;
 	}
 
-	for_each_removed([&](uint32_t idx) {
-		GodotRealityKit::Entity root = owner->get_root_entity();
-		root.setImageBasedLightReceiver(swift::Optional<GodotRealityKit::Entity>::none());
-		entity.setSkybox(GodotRealityKit::Skybox::init());
-		entity.removeFromParent();
-	});
+	const EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
 
 	dirty_idxs.merge(env_deps.changed());
 	if (environments->has_dirty()) {
@@ -96,6 +84,46 @@ void WorldEnvironmentLoader::update(const ResourceLoaderSet &p_resource_loaders)
 			}
 		}
 	}
+}
+
+void WorldEnvironmentLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	if (!get_scene_tree()->get_extension_settings().should_convert_world_environment()) {
+		return;
+	}
+
+	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
+	SkyboxLoader *skyboxes = std::get<SkyboxLoader *>(p_resource_loaders);
+
+	for (Dependency dep : env_deps.get()) {
+		if (is_valid(dep.dst)) {
+			environments->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : skybox_deps.get()) {
+		if (is_valid(dep.dst)) {
+			skyboxes->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+void WorldEnvironmentLoader::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
+	SkyboxLoader *skyboxes = std::get<SkyboxLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
+
+	if (!get_scene_tree()->get_extension_settings().should_convert_world_environment()) {
+		return;
+	}
+
+	for_each_removed([&](uint32_t idx) {
+		GodotRealityKit::Entity root = owner->get_root_entity();
+		root.setImageBasedLightReceiver(swift::Optional<GodotRealityKit::Entity>::none());
+		entity.setSkybox(GodotRealityKit::Skybox::init());
+		entity.removeFromParent();
+	});
 
 	for_each_dirty([&](uint32_t idx) {
 		godot::WorldEnvironment *node = nodes[idx];
@@ -107,14 +135,14 @@ void WorldEnvironmentLoader::update(const ResourceLoaderSet &p_resource_loaders)
 		entity.setName("WorldEnvironment");
 
 		if (godot::Environment *env = *node->get_environment()) {
-			swift::Optional<GodotRealityKit::EnvironmentResource> rkenv = environments->find_resource(env->get_rid());
+			GodotRealityKit::EnvironmentResource rkenv = environments->find_resource(env->get_rid());
 			float exponent = EnvironmentLoader::get_energy_exponent(env);
 			entity.setImageBasedLight(rkenv, constants::ibl_intensity_exponent + exponent);
 			entity.setSkybox(skyboxes->find_resource(env->get_rid()));
 			entity.setParent(swift::Optional<GodotRealityKit::Entity>::some(root));
 			root.setImageBasedLightReceiver(swift::Optional<GodotRealityKit::Entity>::some(entity));
 		} else {
-			entity.setImageBasedLight(swift::Optional<GodotRealityKit::EnvironmentResource>::none(), constants::ibl_intensity_exponent);
+			entity.setImageBasedLight(GodotRealityKit::EnvironmentResource::init(), constants::ibl_intensity_exponent);
 			entity.removeFromParent();
 			entity.setSkybox(GodotRealityKit::Skybox::init());
 			root.setImageBasedLightReceiver(swift::Optional<GodotRealityKit::Entity>::none());

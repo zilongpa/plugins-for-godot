@@ -24,6 +24,7 @@ namespace gdrk {
 
 // Forward declaration — defined in mesh_types.h (included after this header).
 struct Mesh;
+class SkeletonLoader;
 
 // ---------------------------------------------------------------------------
 // Helpers shared between mesh_loader.mm and mesh_encoder.mm.
@@ -41,6 +42,8 @@ struct BlitOp {
 	id<MTLBuffer> src;
 	id<MTLBuffer> dst;
 	NSUInteger size;
+	NSUInteger src_offset = 0;
+	NSUInteger dst_offset = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -106,16 +109,23 @@ public:
 
 	void initialize();
 
-	void start(id<MTLCommandBuffer> p_command_buffer);
+	void start(id<MTLCommandBuffer> p_command_buffer, SkeletonLoader *p_skeletons);
 
 	void prepare(Mesh &p_mesh);
 
-	void encode(Mesh &p_mesh);
+	// Recomputes vertex positions/normals/tangents — cheap enough to run every
+	// frame a mesh deforms (skinning, blend shapes).
+	void encode_positions(Mesh &p_mesh);
+
+	// Re-uploads color/UV attribute data — only needed when the underlying mesh
+	// itself changed, since deformation never touches attributes.
+	void encode_attributes(Mesh &p_mesh);
 
 	void commit();
 
 private:
 	id<MTLCommandBuffer> _command_buffer = nil;
+	SkeletonLoader *_skeletons = nullptr;
 
 	godot::LocalVector<DeformOp> _deform_ops;
 	godot::LocalVector<DecompressOp> _decompress_ops;
@@ -127,19 +137,17 @@ private:
 	id<MTLComputePipelineState> _vertex_decompress_pso = nil;
 	id<MTLComputePipelineState> _attribute_decompress_pso = nil;
 
-	// One method per bit combination — all share the same signature so they can
-	// be placed in a static function pointer table indexed by EncodingMode.
+	// Position encoding only depends on DEFORM/COMPRESSED — WITH_UV is irrelevant,
+	// so the table is indexed by encoding_mode with that bit masked off.
 	using EncodeFn = void (MeshEncoder::*)(Mesh &, uint32_t);
-	static const EncodeFn encode_table[8];
+	static const EncodeFn position_encode_table[4];
 
-	void _encode_static_no_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_deform_no_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_static_compressed_no_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_deform_compressed_no_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_static_with_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_deform_with_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_static_compressed_with_uv(Mesh &p_mesh, uint32_t surface_idx);
-	void _encode_deform_compressed_with_uv(Mesh &p_mesh, uint32_t surface_idx);
+	void _encode_static_pos(Mesh &p_mesh, uint32_t surface_idx);
+	void _encode_deform_pos(Mesh &p_mesh, uint32_t surface_idx);
+	void _encode_static_compressed_pos(Mesh &p_mesh, uint32_t surface_idx);
+	void _encode_deform_compressed_pos(Mesh &p_mesh, uint32_t surface_idx);
+
+	void _encode_attributes_surface(Mesh &p_mesh, uint32_t surface_idx);
 };
 
 } // namespace gdrk

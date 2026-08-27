@@ -57,6 +57,7 @@ struct Mesh {
 		GDRKVertexBufferFormat decompressed_vertex_buffer_format;
 		godot::AABB bounds = godot::AABB();
 		godot::Vector4 uv_scale = godot::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+		godot::Dictionary data;
 
 		friend bool operator==(const SurfaceInfo &lhs, const SurfaceInfo &rhs) = default;
 	};
@@ -64,7 +65,6 @@ struct Mesh {
 	godot::RID mesh_rid;
 	uint64_t instance_id = 0;
 	uint64_t skeleton_id = 0;
-	godot::LocalVector<godot::RID> instance_rids;
 	godot::AABB instance_aabb;
 	SmallLocalVector<Surface, 8> surfaces;
 	SmallLocalVector<SurfaceInfo, 8> surface_infos;
@@ -72,6 +72,14 @@ struct Mesh {
 
 	uint32_t blend_shape_count = 0;
 	bool normalized_blend_shapes = false;
+
+	// When all surfaces share the same vertex format / uv_scale and have no
+	// per-instance deformation (no skeleton, no blend shapes, no compressed
+	// attributes), they are packed into a single multi-part LowLevelMesh —
+	// this resource — and the per-surface `Surface::resource` entries are
+	// left default-initialized. `compacted_resource.isSome()` selects between
+	// the two paths.
+	GodotRealityKit::MeshResource compacted_resource = GodotRealityKit::MeshResource::init();
 
 	// Cached skeletalDeform GPU inputs. Reallocated only when the required
 	// byte length changes; otherwise we memcpy fresh data into .contents
@@ -83,10 +91,12 @@ struct Mesh {
 	// bind poses. nil means "use identity bind poses with bind_idx == bone_idx".
 	godot::Ref<godot::Skin> skin;
 
-	// Snapshot of bone global poses captured in skeleton_pose_updated(), before
-	// Skeleton3D restores pre-modifier state. upload_bone_transforms reads from
-	// this instead of get_bone_global_pose() to pick up modifier-applied poses.
-	godot::LocalVector<godot::Transform3D> bone_pose_snapshot;
+	// Index into SkeletonLoader — shared across every mesh bound to the same
+	// skeleton. UINT32_MAX means "no skeleton". SkeletonLoader owns the bone-pose
+	// snapshot captured before Skeleton3D restores pre-modifier state;
+	// upload_bone_transforms reads it via SkeletonLoader::get_bone_pose_snapshot
+	// instead of calling get_bone_global_pose() directly, to pick up modifier-applied poses.
+	uint32_t skeleton_idx = UINT32_MAX;
 };
 
 } // namespace gdrk

@@ -125,6 +125,21 @@ const VisualShaderNodeWrapper *VisualShaderNodeWrapper::get_input_node(const Vis
 	return &(p_context.all_nodes[shader_type][c.src_index]);
 }
 
+std::string VisualShaderNodeWrapper::cast_expression(VisualProgramBuilderContext &p_context, InputExpression &p_expression, uint32_t p_input_index) const {
+	std::string typed_expression;
+	bool success = p_expression.to_type(input_type(p_input_index), typed_expression);
+
+	if (!success) {
+		std::string error = std::format("Failed to convert expression '{}' of type {} to type {}, no conversion method found",
+				p_expression.expression,
+				port_type_name(p_expression.type),
+				port_type_name(input_type(p_input_index)));
+		p_context.errors.push_back(error);
+		typed_expression = p_expression.expression + " /!!!\\ TYPE_CONVERSION_ERROR: " + error;
+	}
+	return typed_expression;
+}
+
 std::string VisualShaderNodeWrapper::get_input_expression(VisualProgramBuilderContext &p_context,
 		uint32_t p_input_index,
 		bool &p_was_default) const {
@@ -136,19 +151,22 @@ std::string VisualShaderNodeWrapper::get_input_expression(VisualProgramBuilderCo
 	};
 
 	p_was_default = false;
-	std::string typed_expression;
-	bool success = expression.value().to_type(input_type(p_input_index), typed_expression);
+	return cast_expression(p_context, expression.value(), p_input_index);
+}
 
-	if (!success) {
-		std::string error = std::format("Failed to convert expression '{}' of type {} to type {}, no conversion method found",
-				expression.value().expression,
-				port_type_name(expression.value().type),
-				port_type_name(input_type(p_input_index)));
-		p_context.errors.push_back(error);
-		typed_expression = expression.value().expression + " /!!!\\ TYPE_CONVERSION_ERROR: " + error;
-	}
+std::string VisualShaderNodeWrapper::get_input_expression(VisualProgramBuilderContext &p_context,
+		uint32_t p_input_index,
+		const char *default_value,
+		bool &p_was_default) const {
+	std::optional<InputExpression> expression = get_input_var_name(p_context, p_input_index);
 
-	return typed_expression;
+	if (expression == std::nullopt) {
+		p_was_default = true;
+		return default_value;
+	};
+
+	p_was_default = false;
+	return cast_expression(p_context, expression.value(), p_input_index);
 }
 
 void VisualShaderNodeWrapper::fill_swizzle_outputs(VisualProgramBuilderContext &p_context, const char *p_var_name) const {

@@ -30,6 +30,9 @@ protected:
 	static void _bind_methods();
 	void _notification(int p_what);
 
+private:
+	void _apply_transform_to_parent();
+
 public:
 	godot::PackedStringArray _get_configuration_warnings() const override;
 

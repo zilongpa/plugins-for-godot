@@ -16,6 +16,7 @@
 #include "Resources/mesh_loader.h"
 #include "Resources/multimesh_loader.h"
 #include "Resources/shape_loader.h"
+#include "Resources/skeleton_loader.h"
 #include "Resources/skybox_loader.h"
 #include "Resources/texture_loader.h"
 

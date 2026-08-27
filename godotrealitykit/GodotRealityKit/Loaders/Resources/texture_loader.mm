@@ -34,10 +34,19 @@ uint32_t TextureLoader::find_or_add(godot::RID p_texture_rid, godot::Ref<godot::
 			connect_changed(p_texture.ptr(), idx);
 		}
 
+		const bool is_viewport_texture = p_texture.is_valid() && godot::Object::cast_to<godot::ViewportTexture>(p_texture.ptr()) != nullptr;
+
+		// Purging a texture's source Metal texture after upload is opt-in per texture: set the
+		// resource metadata "_gdrk_purge" to true on the Texture2D.
+		const bool purge_opt_in = p_texture.is_valid() &&
+				p_texture->has_meta("_gdrk_purge") &&
+				p_texture->get_meta("_gdrk_purge").booleanize();
+
 		textures[idx] = Texture{
 			.required_usages = p_usage,
 			.dirty_usages = p_usage,
-			.is_viewport_texture = p_texture.is_valid() && godot::Object::cast_to<godot::ViewportTexture>(p_texture.ptr()) != nullptr,
+			.is_viewport_texture = is_viewport_texture,
+			.purge_after_upload = purge_opt_in,
 			.texture_rid = p_texture_rid,
 			.texture = p_texture,
 		};
@@ -51,20 +60,19 @@ uint32_t TextureLoader::find_or_add(godot::RID p_texture_rid, godot::Ref<godot::
 bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 	PROFILE_FUNC_SCOPE;
 
-	bool has_pending_usages = false;
 	for_each_valid([&](uint32_t idx) {
-		if (textures[idx].is_viewport_texture) {
+		if (textures[idx].is_viewport_texture || textures[idx].dirty_usages != 0) {
 			mark_dirty(idx);
-		} else if (textures[idx].dirty_usages != 0) {
-			ResourceLoader<TextureLoader>::mark_dirty(idx);
-			has_pending_usages = true;
 		}
 	});
 
 	bool throttle_finished = for_each_dirty_throttled([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return LocalBitVector::IterationResult::SKIPPED;
+		}
 		Texture &texture = textures[idx];
 		const godot::RID texture_rid = texture.texture_rid;
-		ERR_FAIL_COND(!texture_rid.is_valid());
+		ERR_FAIL_COND_V(!texture_rid.is_valid(), LocalBitVector::IterationResult::SKIPPED);
 
 		// A single godot::Texture2D can be bound as MTLPixelFormatR8Unorm or MTLPixelFormatR8Unorm_sRGB
 		// RealityKit LowLevelTextures don't support Texture View for native color space conversion
@@ -95,7 +103,7 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 			if (src_texture == nil) {
 				// Render target not yet available (e.g. viewport hasn't rendered its first frame).
 				// Leave dirty so we retry next frame.
-				return;
+				return LocalBitVector::IterationResult::SKIPPED;
 			}
 			if (existing_rid != rd_texture_rid) {
 				if ([src_texture mipmapLevelCount] <= 1) {
@@ -121,7 +129,7 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 								[src_texture usage],
 								[src_texture swizzle]);
 
-				ERR_FAIL_COND_MSG(low_level_texture.isNone(), "Failed to create low level texture");
+				ERR_FAIL_COND_V_MSG(low_level_texture.isNone(), LocalBitVector::IterationResult::SKIPPED, "Failed to create low level texture");
 
 				id<MTLTexture> dst_texture = low_level_texture.get().replace(p_command_buffer);
 				id<MTLBlitCommandEncoder> blit_encoder = [p_command_buffer blitCommandEncoder];
@@ -129,29 +137,35 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 				[blit_encoder endEncoding];
 
 				swift::Optional<GodotRealityKit::TextureResource> resource = GodotRealityKit::TextureResource::init(low_level_texture.get());
-				ERR_FAIL_COND(resource.isNone());
+				ERR_FAIL_COND_V(resource.isNone(), LocalBitVector::IterationResult::SKIPPED);
 				if (usage == TextureUsage::Rendering) {
-					texture.resource_srgb = resource;
+					texture.resource_srgb = resource.get();
 					texture.rd_texture_srgb_rid = rd_texture_rid;
-					ERR_FAIL_COND(texture.resource_srgb.isNone());
+					ERR_FAIL_COND_V(!texture.resource_srgb.isSome(), LocalBitVector::IterationResult::SKIPPED);
 				} else {
-					texture.resource_linear = resource;
+					texture.resource_linear = resource.get();
 					texture.rd_texture_linear_rid = rd_texture_rid;
-					ERR_FAIL_COND(texture.resource_linear.isNone());
+					ERR_FAIL_COND_V(!texture.resource_linear.isSome(), LocalBitVector::IterationResult::SKIPPED);
 				}
 			} else if (rd_texture_rid.is_valid()) {
 				id<MTLTexture> dst_texture = nil;
 				swift::Optional<GodotRealityKit::LowLevelTexture> low_level_texture = swift::Optional<GodotRealityKit::LowLevelTexture>::none();
 				if (usage == TextureUsage::Rendering) {
-					ERR_FAIL_COND(texture.resource_srgb.isNone());
-					dst_texture = texture.resource_srgb.get().lowLevelTexture().get().replace(p_command_buffer);
+					ERR_FAIL_COND_V(!texture.resource_srgb.isSome(), LocalBitVector::IterationResult::SKIPPED);
+					dst_texture = texture.resource_srgb.lowLevelTexture().get().replace(p_command_buffer);
 				} else {
-					ERR_FAIL_COND(texture.resource_linear.isNone());
-					dst_texture = texture.resource_linear.get().lowLevelTexture().get().replace(p_command_buffer);
+					ERR_FAIL_COND_V(!texture.resource_linear.isSome(), LocalBitVector::IterationResult::SKIPPED);
+					dst_texture = texture.resource_linear.lowLevelTexture().get().replace(p_command_buffer);
 				}
 				id<MTLBlitCommandEncoder> blit_encoder = [p_command_buffer blitCommandEncoder];
 				[blit_encoder copyFromTexture:src_texture toTexture:dst_texture];
 				[blit_encoder endEncoding];
+			}
+
+			if (texture.purge_after_upload) {
+				[p_command_buffer addCompletedHandler:^(id<MTLCommandBuffer> _) {
+					[src_texture setPurgeableState:MTLPurgeableStateEmpty];
+				}];
 			}
 
 			processed_usages |= usage;
@@ -162,10 +176,9 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 		texture.dirty_usages &= ~processed_usages;
 		if (texture.dirty_usages == 0) {
 			dirty_idxs.remove(idx);
-		} else {
-			has_pending_usages = true;
 		}
+		return processed_usages ? LocalBitVector::IterationResult::PROCESSED : LocalBitVector::IterationResult::SKIPPED;
 	});
 
-	return throttle_finished && !has_pending_usages;
+	return throttle_finished;
 }

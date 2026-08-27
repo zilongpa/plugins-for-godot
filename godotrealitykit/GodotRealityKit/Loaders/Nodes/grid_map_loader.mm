@@ -26,7 +26,7 @@ void GridMapLoader::update_deps(
 
 	Base::update_deps(p_resource_loaders);
 
-	ChangedMeshDependencyListSet changed_mesh_deps = ChangedMeshDependencyListSet(get_capacity());
+	ChangedDependencyListSet changed_mesh_deps = ChangedDependencyListSet(get_capacity());
 	ChangedDependencyListSet changed_material_deps = ChangedDependencyListSet(get_capacity());
 	for_each_removed([&](uint32_t idx) {
 		changed_mesh_deps.mark_changed(idx);
@@ -61,8 +61,7 @@ void GridMapLoader::update_deps(
 		if (mesh_hash != dep_states[idx].mesh_hash) {
 			for (uint32_t bake_mesh_idx = 0; bake_mesh_idx < bake_mesh_count; bake_mesh_idx++) {
 				godot::Ref<godot::Mesh> mesh = bake_meshes[bake_mesh_idx * 2];
-				const godot::RID instance_rid = node->get_bake_mesh_instance(bake_mesh_idx);
-				add_mesh_deps(changed_mesh_deps, meshes, idx, instance_rid, mesh->get_rid(), 0, mesh.ptr());
+				add_mesh_deps(changed_mesh_deps, meshes, idx, mesh->get_rid(), 0, mesh.ptr());
 			}
 
 			dep_states[idx].mesh_hash = mesh_hash;
@@ -82,13 +81,9 @@ void GridMapLoader::update_deps(
 	material_deps.replace_changed(changed_material_deps, materials);
 }
 
-void GridMapLoader::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
-
-	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
-	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
-
-	Base::update(p_resource_loaders);
+void GridMapLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	const MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	const MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
 
 	dirty_idxs.merge(mesh_deps.changed());
 	if (meshes->has_dirty()) {
@@ -107,6 +102,31 @@ void GridMapLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 			}
 		}
 	}
+}
+
+void GridMapLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	for (Dependency dep : mesh_deps.get()) {
+		if (is_valid(dep.dst)) {
+			meshes->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : material_deps.get()) {
+		if (is_valid(dep.dst)) {
+			materials->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+void GridMapLoader::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
 
 	for_each_dirty([&](uint32_t idx) {
 		godot::GridMap *node = nodes[idx];
@@ -117,10 +137,7 @@ void GridMapLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 		const uint32_t bake_mesh_count = static_cast<uint32_t>(bake_meshes.size() / 2);
 		for (uint32_t bake_mesh_idx = 0; bake_mesh_idx < bake_mesh_count; bake_mesh_idx++) {
 			godot::Ref<godot::Mesh> mesh = bake_meshes[bake_mesh_idx * 2];
-			for (uint32_t surface_idx = 0; surface_idx < mesh->get_surface_count(); surface_idx++) {
-				const auto [material_rid, material] = get_surface_material(mesh->get_rid(), mesh.ptr(), surface_idx);
-				GodotRealityKit::Entity child = mesh_surface_to_entity(
-						mesh->get_rid(), uint64_t(0), surface_idx, material_rid, meshes, materials);
+			for (GodotRealityKit::Entity child : node_to_entities(mesh->get_rid(), meshes, materials)) {
 				node_entities[idx].entity.addChild(child);
 			}
 		}

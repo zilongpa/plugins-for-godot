@@ -269,43 +269,43 @@ godot::Variant gdrk::to_port_value(PortType p_port_type, const godot::Variant &p
 
 // pragma - update_parameters
 template <PortType T>
-void update_parameter(int index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &value, const TextureLoader &) {
+void update_parameter(int index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &value, TextureLoader &) {
 	ERR_PRINT(std::format("Unsupported parameter type {} for parameter '{}'", gdrk::port_type_name(T), gdrk::to_std_string(p_uniform.name)).c_str());
 	return;
 }
-template <> void update_parameter<PortType::BOOL>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::BOOL>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	p_sgl_material.setBool(p_index, (bool)p_value);
 }
-template <> void update_parameter<PortType::INT>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::INT>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	p_sgl_material.setInt(p_index, (int)p_value);
 }
-template <> void update_parameter<PortType::FLOAT>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::FLOAT>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	p_sgl_material.setFloat(p_index, (float)p_value);
 }
-template <> void update_parameter<PortType::VEC2F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::VEC2F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	godot::Vector2 vec = (godot::Vector2)p_value;
 	p_sgl_material.setFloat2(p_index, GodotRealityKit::Vector2::init(vec.x, vec.y));
 }
-template <> void update_parameter<PortType::VEC3F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::VEC3F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	godot::Vector3 vec = (godot::Vector3)p_value;
 	p_sgl_material.setFloat3(p_index, GodotRealityKit::Vector3::init(vec.x, vec.y, vec.z));
 }
-template <> void update_parameter<PortType::VEC4F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &) {
+template <> void update_parameter<PortType::VEC4F>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &) {
 	godot::Vector4 vec = (godot::Vector4)p_value;
 	p_sgl_material.setFloat4(p_index, GodotRealityKit::Vector4::init(vec.x, vec.y, vec.z, vec.w));
 }
-template <> void update_parameter<PortType::SAMPLER2D>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &p_textures) {
+template <> void update_parameter<PortType::SAMPLER2D>(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &p_textures) {
 	godot::Texture *texture = godot::Object::cast_to<godot::Texture>((godot::Object *)p_value);
 	godot::RID rid = texture ? texture->get_rid() : godot::RID();
-	swift::Optional<GodotRealityKit::TextureResource> resource = p_textures.find_resource(rid, p_uniform.srgb_texture ? TextureLoader::TextureUsage::Rendering : TextureLoader::TextureUsage::Compute);
+	GodotRealityKit::TextureResource resource = p_textures.find_resource_and_mark_used(rid, p_uniform.srgb_texture ? TextureLoader::TextureUsage::Rendering : TextureLoader::TextureUsage::Compute);
 	p_sgl_material.setTexture(p_index, resource);
 }
 DEFINE_ENUM_FUNCTION_TABLE(update_parameter_functions, PortType, PT_COUNT, update_parameter)
-void update_parameter(PortType p_port_type, int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &p_textures) {
+void update_parameter(PortType p_port_type, int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &p_textures) {
 	update_parameter_functions[p_port_type](p_index, p_uniform, p_sgl_material, p_value, p_textures);
 }
 
-void gdrk::update_material_parameter(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &p_textures) {
+void gdrk::update_material_parameter(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &p_textures) {
 	if (p_value.get_type() == godot::Variant::Type::NIL) {
 		p_value = p_uniform.default_value;
 	} else {

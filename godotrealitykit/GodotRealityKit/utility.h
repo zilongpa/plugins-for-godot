@@ -104,6 +104,11 @@ static inline godot::Node *get_node_instance(uint64_t p_node_id) {
 // A dynamically sized bitset
 class LocalBitVector {
 public:
+	enum class IterationResult {
+		SKIPPED,
+		PROCESSED,
+	};
+
 	_FORCE_INLINE_ uint32_t size() const {
 		return blocks.size() * bits_per_block;
 	}
@@ -186,9 +191,10 @@ public:
 					p_start_idx = subblock_key_base + subblock_key;
 					return false;
 				}
-				fn(subblock_key_base + subblock_key);
+				if (fn(subblock_key_base + subblock_key) == IterationResult::PROCESSED) {
+					processed++;
+				}
 				temp ^= subblock_type(0x1) << subblock_key;
-				processed++;
 			}
 		}
 
@@ -290,7 +296,7 @@ public:
 				memcpy((void *)&_size, (void *)&p_from._size, HEADER_SIZE + DATA_PADDING + p_from._size * sizeof(T));
 				memset((void *)&p_from._size, 0, HEADER_SIZE + DATA_PADDING + p_from._size * sizeof(T));
 			} else {
-				for (T &&element : std::move(p_from)) {
+				for (T &element : p_from) {
 					memnew_placement(ptr() + _size++, T(std::move(element)));
 				}
 

@@ -44,14 +44,14 @@ public:
 
 	bool update();
 
-	swift::Optional<GodotRealityKit::EnvironmentResource> find_resource(godot::RID p_env_rid) const {
+	GodotRealityKit::EnvironmentResource find_resource(godot::RID p_env_rid) const {
 		if (!p_env_rid.is_valid()) {
-			return swift::Optional<GodotRealityKit::EnvironmentResource>::none();
+			return GodotRealityKit::EnvironmentResource::init();
 		}
 
-		ERR_FAIL_COND_V(!environment_rid_to_idx.has(p_env_rid), swift::Optional<GodotRealityKit::EnvironmentResource>::none());
+		ERR_FAIL_COND_V(!environment_rid_to_idx.has(p_env_rid), GodotRealityKit::EnvironmentResource::init());
 		const uint32_t idx = environment_rid_to_idx.get(p_env_rid);
-		return swift::Optional<GodotRealityKit::EnvironmentResource>::some(environments[idx].resource);
+		return environments[idx].resource;
 	}
 
 	static float get_energy_multiplier(godot::Environment *);

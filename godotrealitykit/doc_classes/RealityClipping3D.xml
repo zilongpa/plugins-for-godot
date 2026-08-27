@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="RealityClipping3D" inherits="Node3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Clips the visual content of its parent's subtree to a box on visionOS.
+	</brief_description>
+	<description>
+		This wraps RealityKit's [url=https://developer.apple.com/documentation/RealityKit/ClippingComponent]ClippingComponent[/url].
+		Add a RealityClipping3D as a child of a Node3D to clip that node and all of its descendants
+		to a box centered on the RealityClipping3D. Only one RealityClipping3D is supported per parent.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="feather_enabled" type="bool" setter="set_feather_enabled" getter="get_feather_enabled" default="false">
+			Whether to feather (fade out) content near the edges of the clipping box, instead of
+			clipping it with a hard edge.
+		</member>
+		<member name="feather_falloff" type="int" setter="set_feather_falloff" getter="get_feather_falloff" enum="RealityClipping3D.Falloff" default="0">
+			The falloff curve used for the feathered edge, when [member feather_enabled] is [code]true[/code].
+		</member>
+		<member name="feather_inset" type="Vector3" setter="set_feather_inset" getter="get_feather_inset" default="Vector3(0, 0, 0)">
+			The distance, per axis, from each face of the clipping box over which content fades out,
+			when [member feather_enabled] is [code]true[/code].
+		</member>
+		<member name="size" type="Vector3" setter="set_size" getter="get_size" default="Vector3(1, 1, 1)">
+			Size of the clipping box, centered on the RealityClipping3D. There is a gizmo displaying
+			the box in the editor, so that you can preview what is inside and outside the box.
+		</member>
+	</members>
+	<constants>
+		<constant name="FALLOFF_LINEAR" value="0" enum="Falloff">
+			Content fades out linearly across the feathered edge.
+		</constant>
+		<constant name="FALLOFF_CUBIC" value="1" enum="Falloff">
+			Content fades out following a cubic curve across the feathered edge.
+		</constant>
+	</constants>
+</class>

@@ -31,6 +31,8 @@
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
 
+#include <typeinfo>
+
 namespace gdrk {
 
 struct alignas(8) Dependency {
@@ -119,17 +121,22 @@ public:
 
 	template <std::invocable<uint32_t> Fn>
 	bool for_each_dirty_throttled(const Fn &fn) {
-		return ObjectLoader<Derived>::dirty_idxs.for_each_n([&](uint32_t idx) {
-			if (static_cast<const Derived *>(this)->is_valid(idx)) {
-				fn(idx);
+		const bool finished = ObjectLoader<Derived>::dirty_idxs.for_each_n([&](uint32_t idx) {
+			if (!static_cast<const Derived *>(this)->is_valid(idx)) {
+				return LocalBitVector::IterationResult::SKIPPED;
 			}
+			const LocalBitVector::IterationResult result = fn(idx);
+			return result;
 		},
 				max_resources_per_update, next_dirty_idx);
+		return finished;
 	}
 
 	void _reserve(uint32_t p_capacity) {
 		ObjectLoader<Derived>::_reserve(p_capacity);
 		resource_changed_callables.resize(p_capacity);
+		used_in_frame.resize(p_capacity);
+		changed_in_frame.resize(p_capacity);
 
 		const uint32_t prev_capacity = resource_ref_counts.size();
 		resource_ref_counts.resize(p_capacity);
@@ -187,8 +194,24 @@ public:
 		return !is_tagged_for_removal(p_idx);
 	}
 
+	_FORCE_INLINE_ void mark_used_in_frame(uint32_t p_idx) {
+		used_in_frame.insert(p_idx);
+	}
+
+	_FORCE_INLINE_ bool is_used_in_frame(uint32_t p_idx) const {
+		return used_in_frame.has(p_idx);
+	}
+
+	_FORCE_INLINE_ bool did_change_in_frame(uint32_t p_idx) const {
+		return changed_in_frame.has(p_idx);
+	}
+
 	void reset_dirty() {
-		ObjectLoader<Derived>::reset_dirty();
+		used_in_frame.for_each([&](uint32_t idx) {
+			ObjectLoader<Derived>::mark_clean(idx);
+		});
+		used_in_frame.clear();
+		changed_in_frame.clear();
 		next_dirty_idx = 0;
 	}
 
@@ -205,18 +228,29 @@ protected:
 	}
 
 	void changed(uint32_t p_idx) {
+		changed_in_frame.insert(p_idx);
 		static_cast<Derived *>(this)->mark_dirty(p_idx);
+	}
+
+	_FORCE_INLINE_ void mark_changed_in_frame(uint32_t p_idx) {
+		changed_in_frame.insert(p_idx);
 	}
 
 	uint32_t alloc_idx() {
 		const uint32_t res = ObjectLoader<Derived>::alloc_idx();
 		resource_ref_counts[res] = 0;
+		used_in_frame.insert(res);
 		return res;
 	}
 
 	void free_idx(uint32_t p_idx) {
 		ObjectLoader<Derived>::free_idx(p_idx);
 		resource_ref_counts[p_idx] = in_remove_queue_mask;
+		// A resource freed while still dirty must not leak its dirty/changed/used
+		// bits into a recycled slot now that reset_dirty() keeps unused dirty bits.
+		ObjectLoader<Derived>::mark_clean(p_idx);
+		changed_in_frame.remove(p_idx);
+		used_in_frame.remove(p_idx);
 	}
 
 	_FORCE_INLINE_ void tag_for_removal(uint32_t p_idx) {
@@ -246,6 +280,8 @@ private:
 	godot::LocalVector<godot::Callable> resource_changed_callables;
 	godot::LocalVector<uint32_t> resource_ref_counts;
 	godot::LocalVector<uint32_t> remove_queue;
+	LocalBitVector used_in_frame;
+	LocalBitVector changed_in_frame;
 };
 
 template <typename Derived>

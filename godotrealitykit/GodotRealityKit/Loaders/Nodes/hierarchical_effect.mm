@@ -51,6 +51,18 @@ void IBLEffect::update(NodeLoaders *p_nodes, GodotRealityKit::Entity entity, god
 	}
 }
 
+void ClippingEffect::update(NodeLoaders *p_nodes, GodotRealityKit::Entity entity, godot::RID p_new_rid) {
+	// Unlike PortalEffect, ClippingEffect doesn't own reparenting: a node can simultaneously be
+	// inside a portal (or nothing) and inside a clip region. Only touch setParent when this node
+	// is actually clipped; otherwise leave whatever PortalEffect/root placement already set,
+	// since for_each_effect() runs every effect in sequence and an unconditional fallback here
+	// would clobber a valid reparent another effect just performed this same pass.
+	if (p_new_rid.is_valid()) {
+		GodotRealityKit::Entity new_parent = p_nodes->get_clip_reparent_anchor(p_new_rid);
+		entity.setParent(swift::Optional<GodotRealityKit::Entity>::some(new_parent));
+	}
+}
+
 template <typename Effect>
 Effect &HierarchicalEffect<Effect>::get_effect(godot::RID p_rid) {
 	static Effect default_effect;
@@ -164,3 +176,4 @@ template class gdrk::HierarchicalEffect<HoverEffect>;
 template class gdrk::HierarchicalEffect<PortalEffect>;
 template class gdrk::HierarchicalEffect<PortalCrossingEffect>;
 template class gdrk::HierarchicalEffect<IBLEffect>;
+template class gdrk::HierarchicalEffect<ClippingEffect>;

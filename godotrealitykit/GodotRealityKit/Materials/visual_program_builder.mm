@@ -38,14 +38,14 @@ using VS = godot::VisualShader;
 
 #pragma mark - VisualProgramMetadata
 
-int VisualProgramMetadata::version = 2;
+int VisualProgramMetadata::version = 3;
 
 godot::String VisualProgramMetadata::serialize(int p_version) {
 	godot::Dictionary metadata;
 	godot::Array uniform_array;
 
 	metadata.set("version", p_version);
-	metadata.set("transparent", is_transparent);
+	metadata.set("is_transparent", is_transparent);
 
 	for (auto desc : uniforms) {
 		godot::Dictionary uniform;
@@ -69,7 +69,7 @@ bool VisualProgramMetadata::unserialize(godot::String p_json, const godot::Ref<g
 		ERR_PRINT(std::format("VisualProgramMetadata: invalid version. Expected {}, got: {}. Consider re-exporting your project", VisualProgramMetadata::version, version).c_str());
 		return false;
 	}
-	p_out.is_transparent = metadata.get("transparent", false);
+	p_out.is_transparent = metadata.get("is_transparent", false);
 	godot::Array uniforms = metadata.get("uniforms", godot::Array());
 
 	uint32_t index = 0;
@@ -145,8 +145,9 @@ void print_code(const std::vector<std::string> &p_code_parts) {
 }
 
 VisualProgramBuilder::VisualProgramBuilder(swift::Optional<GodotRealityKit::Compiler> p_compiler,
-		const Ref<VisualShader> &p_shader) :
-		compiler(p_compiler), shader(p_shader) {
+		const ShaderMaterialDescription &p_description) :
+		compiler(p_compiler), shader(p_description.shader) {
+	context.material_description = &p_description;
 }
 
 bool VisualProgramBuilder::check_for_errors(const char *step) {
@@ -463,7 +464,7 @@ void VisualProgramBuilder::generate_sgl() {
 		context.code_parts.push_back(sgl::builtin::utility_functions());
 		context.code_parts.push_back(sgl::builtin::color_functions());
 		context.code_parts.push_back(sgl::builtin::swizzle());
-		context.code_parts.push_back(sgl::builtin::vertex::attributes());
+		context.code_parts.push_back(sgl::builtin::vertex::attributes(&context.material_description->render_mode));
 		context.code_parts.push_back(sgl::builtin::cast_declarations());
 	});
 
@@ -548,7 +549,7 @@ void bind_uniform<PortType::VEC4F>(GodotRealityKit::SGLProgram &p_program, Shade
 
 template <>
 void bind_uniform<PortType::SAMPLER2D>(GodotRealityKit::SGLProgram &p_program, ShaderMaterialDescription &p_desc, const UniformDescriptor &p_uniform) {
-	uint8_t index = p_program.bindTextureParameter(to_swift_string(p_uniform.name), swift::Optional<GodotRealityKit::TextureResource>::none());
+	uint8_t index = p_program.bindTextureParameter(to_swift_string(p_uniform.name), GodotRealityKit::TextureResource::init());
 	p_desc.texture_idxs.push_back(index);
 }
 
@@ -558,6 +559,73 @@ void bind_uniform(PortType p_port_type, GodotRealityKit::SGLProgram &p_program, 
 }
 
 void VisualProgramBuilder::finalize(ShaderMaterialDescription &p_desc, GodotRealityKit::SGLProgram &p_program) {
+	const bool is_transparent = p_desc.is_transparent();
+	const bool no_depth_test = p_desc.render_mode.get_flag(RenderModeDescription::FLAG_DEPTH_TEST_DISABLED);
+	const bool depth_prepass = p_desc.render_mode.get_flag(RenderModeDescription::FLAG_DEPTH_PREPASS_ALPHA);
+
+#define WARN_UNSUPPORTED_BLEND_MODE(mode)                                                                        \
+	if (p_desc.render_mode.blend == RenderModeDescription::BlendMode::BLEND_##mode) {                            \
+		WARN_COMPAT_MSG("Blend mode " #mode " not supported when rendering with RealityKit, defaulting to MIX"); \
+	}
+
+	WARN_UNSUPPORTED_BLEND_MODE(ADD)
+	WARN_UNSUPPORTED_BLEND_MODE(SUB)
+	WARN_UNSUPPORTED_BLEND_MODE(MUL)
+	WARN_UNSUPPORTED_BLEND_MODE(PREMUL_ALPHA)
+
+	if (p_desc.render_mode.depth_test == RenderModeDescription::DEPTH_TEST_INVERTED) {
+		WARN_COMPAT_MSG("Depth test INVERTED not supported when rendering with RealityKit");
+	}
+
+#define WARN_UNSUPPORTED_FLAG(flag, godot_flag)                                              \
+	if (p_desc.render_mode.get_flag(RenderModeDescription::flag)) {                          \
+		WARN_COMPAT_MSG(godot_flag " ON, but not supported when rendering with RealityKit"); \
+	}
+
+	WARN_UNSUPPORTED_FLAG(FLAG_SSS_MODE_SKIN, "flags/sss_mode_skin")
+	WARN_UNSUPPORTED_FLAG(FLAG_WIREFRAME, "flags/wireframe")
+	WARN_UNSUPPORTED_FLAG(FLAG_DEPTH_PREPASS_ALPHA, "flags/depth_prepass_alpha ")
+	WARN_UNSUPPORTED_FLAG(FLAG_WORLD_VERTEX_COORDS, "flags/world_vertex_coords")
+	WARN_UNSUPPORTED_FLAG(FLAG_ENSURE_CORRECT_NORMALS, "flags/ensure_correct_normals")
+	WARN_UNSUPPORTED_FLAG(FLAG_SHADOWS_DISABLED, "flags/shadow_disabled")
+	WARN_UNSUPPORTED_FLAG(FLAG_AMBIENT_LIGHT_DISABLED, "flags/ambient_light_disabled")
+	WARN_UNSUPPORTED_FLAG(FLAG_SHADOW_TO_OPACITY, "flags/shadow_to_opacity")
+	WARN_UNSUPPORTED_FLAG(FLAG_VERTEX_LIGHTING, "flags/vertex_lighting")
+	WARN_UNSUPPORTED_FLAG(FLAG_PARTICLE_TRAILS, "flags/particle_trails")
+	WARN_UNSUPPORTED_FLAG(FLAG_ALPHA_TO_COVERAGE, "flags/alpha_to_coverage")
+	WARN_UNSUPPORTED_FLAG(FLAG_ALPHA_TO_COVERAGE_AND_ONE, "flags/alpha_to_coverage_and_one")
+	WARN_UNSUPPORTED_FLAG(FLAG_DEBUG_SHADOW_SPLITS, "flags/debug_shadow_splits")
+	WARN_UNSUPPORTED_FLAG(FLAG_FOG_DISABLED, "flags/fog_disabled")
+	WARN_UNSUPPORTED_FLAG(FLAG_SPECULAR_OCCLUSION_DISABLED, "flags/specular_occlusion_disabled")
+
+	p_program.setCullMode(p_desc.render_mode.cull);
+
+	if (is_transparent) {
+		p_program.setSortOrder(p_desc.render_priority);
+		p_program.setSortGroup(p_desc.use_depth_postpass ? 2 : 1); // depth postPass vs. standard transparency
+	}
+
+	p_program.setReadsDepth(!no_depth_test);
+
+	switch (p_desc.render_mode.depth_draw) {
+		case RenderModeDescription::DEPTH_DRAW_OPAQUE: {
+			p_program.setWritesDepth(!is_transparent && !no_depth_test);
+			break;
+		}
+		case RenderModeDescription::DEPTH_DRAW_ALWAYS: {
+			p_program.setWritesDepth(!no_depth_test);
+			break;
+		}
+		case RenderModeDescription::DEPTH_DRAW_NEVER: {
+			p_program.setWritesDepth(false);
+
+			break;
+		}
+		default: {
+			WARN_COMPAT_MSG("Unhandled depth draw mode");
+		}
+	}
+
 	uint32_t index = 0;
 	for (const UniformDescriptor &uniform : p_desc.uniforms) {
 		bind_uniform(uniform.type, p_program, p_desc, uniform);

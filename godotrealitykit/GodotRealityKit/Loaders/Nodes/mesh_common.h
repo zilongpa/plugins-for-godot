@@ -17,14 +17,23 @@
 #include "portal_mesh_instance_3d.h"
 
 #include <godot_cpp/classes/cpu_particles3d.hpp>
+#include <godot_cpp/classes/label3d.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/multi_mesh_instance3d.hpp>
+#include <godot_cpp/classes/sprite3d.hpp>
 
 namespace godot {
 class MeshInstance3D;
 }
 
 namespace gdrk {
+
+template <typename GeometryInstanceNode>
+inline constexpr bool node_uses_depth_postpass =
+		std::is_same_v<GeometryInstanceNode, godot::MultiMeshInstance3D> ||
+		std::is_same_v<GeometryInstanceNode, godot::CPUParticles3D> ||
+		std::is_same_v<GeometryInstanceNode, godot::Label3D> ||
+		std::is_same_v<GeometryInstanceNode, godot::Sprite3D>;
 
 struct MultiMeshDependencyState {
 	uint32_t mesh_hash = 0;
@@ -203,24 +212,78 @@ inline static GodotRealityKit::Entity mesh_surface_to_entity(
 		uint32_t p_surface_idx,
 		godot::RID p_material_rid,
 		const MeshLoader *p_meshes,
-		const MaterialLoader *p_materials) {
+		const MaterialLoader *p_materials,
+		bool p_use_depth_postpass = false) {
 	if (!p_mesh_rid.is_valid()) {
 		return GodotRealityKit::Entity::initAndMaterialize();
 	}
 
 	const GodotRealityKit::Entity entity = GodotRealityKit::Entity::initAndMaterialize();
-	swift::Optional<GodotRealityKit::MeshResource> mesh_resource =
+	GodotRealityKit::MeshResource mesh_resource =
 			p_meshes->find_resource(p_mesh_rid, p_instance_id, p_surface_idx);
-	ERR_FAIL_COND_V(mesh_resource.isNone(), GodotRealityKit::Entity::initAndMaterialize());
+	ERR_FAIL_COND_V(!mesh_resource.isSome(), GodotRealityKit::Entity::initAndMaterialize());
 
-	if (p_material_rid.is_valid() && p_materials->is_loading(p_material_rid)) {
+	if (p_material_rid.is_valid() && p_materials->is_loading(p_material_rid, p_use_depth_postpass)) {
 		return GodotRealityKit::Entity::initAndMaterialize();
 	}
 
-	swift::Array<swift::Optional<GodotRealityKit::SGLMaterial>> material_resources =
-			swift::Array<swift::Optional<GodotRealityKit::SGLMaterial>>::init(p_materials->find_resource(p_material_rid), 1);
+	swift::Array<GodotRealityKit::SGLMaterial> material_resources =
+			swift::Array<GodotRealityKit::SGLMaterial>::init(p_materials->find_resource(p_material_rid, p_use_depth_postpass), 1);
 
-	entity.setModel(mesh_resource.get(), material_resources);
+	entity.setModel(mesh_resource, material_resources);
+	return entity;
+}
+
+template <std::derived_from<godot::GeometryInstance3D> GeometryInstanceNode>
+inline static GodotRealityKit::Entity mesh_compacted_to_entity(
+		const GeometryInstanceNode *p_vi,
+		const MeshLoader *p_meshes,
+		const MaterialLoader *p_materials,
+		const MultiMeshLoader *p_multimeshes) {
+	const auto [mesh_rid, mesh] = get_mesh<true>(p_vi);
+
+	uint64_t instance_id = 0;
+	if constexpr (std::is_base_of_v<GeometryInstanceNode, godot::MeshInstance3D>) {
+		const bool has_skeleton = godot::Object::cast_to<godot::Skeleton3D>(p_vi->get_parent()) != nullptr;
+		if (has_skeleton || p_vi->get_blend_shape_count() > 0) {
+			instance_id = p_vi->get_instance_id();
+		}
+	}
+
+	if (!mesh_rid.is_valid()) {
+		return GodotRealityKit::Entity::initAndMaterialize();
+	}
+
+	constexpr bool use_depth_postpass = node_uses_depth_postpass<GeometryInstanceNode>;
+
+	const GodotRealityKit::Entity entity = GodotRealityKit::Entity::initAndMaterialize();
+	GodotRealityKit::MeshResource mesh_resource = p_meshes->find_compacted_resource(mesh_rid, instance_id);
+	ERR_FAIL_COND_V(!mesh_resource.isSome(), GodotRealityKit::Entity::initAndMaterialize());
+
+	if constexpr (std::is_same_v<GeometryInstanceNode, RealityPortalMeshInstance3D>) {
+		entity.setPortalModel(mesh_resource);
+		return entity;
+	}
+
+	const uint32_t surface_count = mesh_get_surface_count(mesh_rid);
+	swift::Array<GodotRealityKit::SGLMaterial> material_resources =
+			swift::Array<GodotRealityKit::SGLMaterial>::init();
+	for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+		const auto [material_rid, material] = get_surface_material(p_vi, surface_idx);
+		if (material_rid.is_valid() && p_materials->is_loading(material_rid, use_depth_postpass)) {
+			return GodotRealityKit::Entity::initAndMaterialize();
+		}
+		material_resources.append(p_materials->find_resource(material_rid, use_depth_postpass));
+	}
+
+	entity.setModel(mesh_resource, material_resources);
+
+	if constexpr (std::is_same_v<GeometryInstanceNode, godot::MultiMeshInstance3D> ||
+			std::is_same_v<GeometryInstanceNode, godot::CPUParticles3D>) {
+		const godot::RID multimesh_rid = p_vi->get_base();
+		entity.setInstanceData(p_multimeshes->find_resource(multimesh_rid));
+	}
+
 	return entity;
 }
 
@@ -243,15 +306,15 @@ inline static GodotRealityKit::Entity mesh_surface_to_entity(
 
 	if constexpr (std::is_same_v<GeometryInstanceNode, RealityPortalMeshInstance3D>) {
 		GodotRealityKit::Entity entity = GodotRealityKit::Entity::initAndMaterialize();
-		swift::Optional<GodotRealityKit::MeshResource> mesh_resource =
+		GodotRealityKit::MeshResource mesh_resource =
 				p_meshes->find_resource(mesh_rid, instance_id, p_surface_idx);
-		entity.setPortalModel(mesh_resource.get());
+		entity.setPortalModel(mesh_resource);
 		return entity;
 	}
 
 	const auto [material_rid, material] = get_surface_material(p_vi, p_surface_idx);
 	const GodotRealityKit::Entity entity = mesh_surface_to_entity(
-			mesh_rid, instance_id, p_surface_idx, material_rid, p_meshes, p_materials);
+			mesh_rid, instance_id, p_surface_idx, material_rid, p_meshes, p_materials, node_uses_depth_postpass<GeometryInstanceNode>);
 
 	if constexpr (std::is_same_v<GeometryInstanceNode, godot::MultiMeshInstance3D> ||
 			std::is_same_v<GeometryInstanceNode, godot::CPUParticles3D>) {
@@ -262,11 +325,93 @@ inline static GodotRealityKit::Entity mesh_surface_to_entity(
 	return entity;
 }
 
+template <std::derived_from<godot::GeometryInstance3D> GeometryInstanceNode>
+inline static SmallLocalVector<GodotRealityKit::Entity, 8> node_to_entities(
+		const GeometryInstanceNode *p_vi,
+		const MeshLoader *p_meshes,
+		const MaterialLoader *p_materials,
+		const MultiMeshLoader *p_multimeshes) {
+	const auto [mesh_rid, mesh] = get_mesh<true>(p_vi);
+
+	uint64_t instance_id = 0;
+	if constexpr (std::is_base_of_v<GeometryInstanceNode, godot::MeshInstance3D>) {
+		const bool has_skeleton = godot::Object::cast_to<godot::Skeleton3D>(p_vi->get_parent()) != nullptr;
+		if (has_skeleton || p_vi->get_blend_shape_count() > 0) {
+			instance_id = p_vi->get_instance_id();
+		}
+	}
+
+	SmallLocalVector<GodotRealityKit::Entity, 8> res;
+	if (!mesh_rid.is_valid()) {
+		return res;
+	}
+
+	if (p_meshes->is_compacted(mesh_rid, instance_id)) {
+		res.push_back(mesh_compacted_to_entity(p_vi, p_meshes, p_materials, p_multimeshes));
+	} else {
+		const uint32_t surface_count = mesh_get_surface_count(mesh_rid);
+		res.reserve(surface_count);
+		for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+			res.push_back(mesh_surface_to_entity(p_vi, surface_idx, p_meshes, p_materials, p_multimeshes));
+		}
+	}
+
+	return res;
+}
+
+inline static GodotRealityKit::Entity mesh_compacted_to_entity(
+		godot::RID p_mesh_rid,
+		const MeshLoader *p_meshes,
+		const MaterialLoader *p_materials) {
+	if (!p_mesh_rid.is_valid()) {
+		return GodotRealityKit::Entity::initAndMaterialize();
+	}
+
+	const GodotRealityKit::Entity entity = GodotRealityKit::Entity::initAndMaterialize();
+	GodotRealityKit::MeshResource mesh_resource = p_meshes->find_compacted_resource(p_mesh_rid, 0);
+	ERR_FAIL_COND_V(!mesh_resource.isSome(), GodotRealityKit::Entity::initAndMaterialize());
+
+	const uint32_t surface_count = mesh_get_surface_count(p_mesh_rid);
+	swift::Array<GodotRealityKit::SGLMaterial> material_resources =
+			swift::Array<GodotRealityKit::SGLMaterial>::init();
+	for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+		const auto [material_rid, material] = get_surface_material(p_mesh_rid, nullptr, surface_idx);
+		if (material_rid.is_valid() && p_materials->is_loading(material_rid)) {
+			return GodotRealityKit::Entity::initAndMaterialize();
+		}
+		material_resources.append(p_materials->find_resource(material_rid));
+	}
+
+	entity.setModel(mesh_resource, material_resources);
+	return entity;
+}
+
+inline static SmallLocalVector<GodotRealityKit::Entity, 8> node_to_entities(
+		godot::RID p_mesh_rid,
+		const MeshLoader *p_meshes,
+		const MaterialLoader *p_materials) {
+	SmallLocalVector<GodotRealityKit::Entity, 8> res;
+	if (!p_mesh_rid.is_valid()) {
+		return res;
+	}
+
+	if (p_meshes->is_compacted(p_mesh_rid, 0)) {
+		res.push_back(mesh_compacted_to_entity(p_mesh_rid, p_meshes, p_materials));
+	} else {
+		const uint32_t surface_count = mesh_get_surface_count(p_mesh_rid);
+		res.reserve(surface_count);
+		for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+			const auto [material_rid, material] = get_surface_material(p_mesh_rid, nullptr, surface_idx);
+			res.push_back(mesh_surface_to_entity(p_mesh_rid, 0, surface_idx, material_rid, p_meshes, p_materials));
+		}
+	}
+	return res;
+}
+
 inline static SmallLocalVector<uint32_t, 8> add_mesh_deps(
-		ChangedMeshDependencyListSet &p_changed_mesh_deps,
+		ChangedDependencyListSet &p_changed_mesh_deps,
 		MeshLoader *p_meshes,
 		uint32_t p_node_idx,
-		godot::RID p_instance_rid,
 		godot::RID p_mesh_rid,
 		uint64_t p_instance_id = 0,
 		godot::Mesh *p_mesh = nullptr,
@@ -277,7 +422,6 @@ inline static SmallLocalVector<uint32_t, 8> add_mesh_deps(
 	if (p_mesh_rid.is_valid()) {
 		const uint32_t mesh_idx = p_meshes->find_or_add(p_mesh_rid, p_instance_id, p_mesh, p_skeleton);
 		p_changed_mesh_deps.add_changed_dep(mesh_idx, p_node_idx);
-		p_changed_mesh_deps.add_changed_dep_instance(p_instance_rid);
 		res.push_back(mesh_idx);
 	}
 
@@ -286,12 +430,11 @@ inline static SmallLocalVector<uint32_t, 8> add_mesh_deps(
 
 template <std::derived_from<godot::GeometryInstance3D> GeometryInstanceNode>
 inline static SmallLocalVector<uint32_t, 8> add_mesh_deps(
-		ChangedMeshDependencyListSet &p_changed_mesh_deps,
+		ChangedDependencyListSet &p_changed_mesh_deps,
 		MeshLoader *p_meshes,
 		uint32_t p_node_idx,
 		const GeometryInstanceNode *p_vi) {
 	const auto [mesh_rid, mesh] = get_mesh(p_vi);
-	const godot::RID instance_rid = p_vi->get_instance();
 
 	uint64_t instance_id = 0;
 	godot::Skeleton3D *skeleton = nullptr;
@@ -304,7 +447,7 @@ inline static SmallLocalVector<uint32_t, 8> add_mesh_deps(
 		}
 	}
 
-	return add_mesh_deps(p_changed_mesh_deps, p_meshes, p_node_idx, instance_rid, mesh_rid, instance_id, mesh.ptr(), skeleton);
+	return add_mesh_deps(p_changed_mesh_deps, p_meshes, p_node_idx, mesh_rid, instance_id, mesh.ptr(), skeleton);
 }
 
 inline static SmallLocalVector<uint32_t, 8> add_material_deps(
@@ -334,10 +477,12 @@ inline static SmallLocalVector<uint32_t, 8> add_material_deps(
 		const GeometryInstanceNode *p_vi) {
 	p_changed_material_deps.mark_changed(p_node_idx);
 
+	constexpr bool use_depth_postpass = node_uses_depth_postpass<GeometryInstanceNode>;
+
 	SmallLocalVector<uint32_t, 8> res;
 	for (uint32_t surface_idx = 0; surface_idx < mesh_get_surface_count(p_vi); surface_idx++) {
 		const auto [material_rid, material] = get_surface_material(p_vi, surface_idx);
-		const uint32_t material_idx = p_materials->find_or_add(material_rid, material);
+		const uint32_t material_idx = p_materials->find_or_add(material_rid, material, use_depth_postpass);
 		p_changed_material_deps.add_changed_dep(material_idx, p_node_idx);
 		res.push_back(material_idx);
 	}
@@ -346,7 +491,7 @@ inline static SmallLocalVector<uint32_t, 8> add_material_deps(
 }
 
 template <std::derived_from<godot::GeometryInstance3D> GeometryInstanceNode>
-inline static void add_dirty_multimesh_deps(ChangedMeshDependencyListSet &p_changed_mesh_deps,
+inline static void add_dirty_multimesh_deps(ChangedDependencyListSet &p_changed_mesh_deps,
 		ChangedDependencyListSet &p_changed_multimesh_deps,
 		ChangedDependencyListSet &p_changed_material_deps,
 		godot::LocalVector<MultiMeshDependencyState> &dep_states,
@@ -371,7 +516,9 @@ inline static void add_dirty_multimesh_deps(ChangedMeshDependencyListSet &p_chan
 	const uint32_t multimesh_hash = godot::hash_fmix32(multimesh_hash_state);
 	const uint32_t material_hash = godot::hash_fmix32(material_hash_state);
 	if (mesh_hash != dep_states[p_idx].mesh_hash) {
-		add_mesh_deps(p_changed_mesh_deps, p_meshes, p_idx, p_vi);
+		for (uint32_t mesh_idx : add_mesh_deps(p_changed_mesh_deps, p_meshes, p_idx, p_vi)) {
+			p_meshes->set_no_compact(mesh_idx);
+		}
 		dep_states[p_idx].mesh_hash = mesh_hash;
 	}
 

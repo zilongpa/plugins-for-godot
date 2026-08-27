@@ -164,7 +164,7 @@ public:
 
 	NodeLoader(NodeLoaders *p_owner) :
 			Base(p_owner) {
-		visibility_changed_collector.initialize(this, &NodeLoader::_on_visibility_changed);
+		visibility_changed_collector.initialize(this, &NodeLoader::_visibility_changed);
 	}
 
 	GodotRealityKit::Entity _create_entity() {
@@ -182,6 +182,8 @@ public:
 	_FORCE_INLINE_ bool is_visible(uint32_t p_idx) const { return node_visible_idxs.has(p_idx); }
 	_FORCE_INLINE_ void mark_visible(uint32_t p_idx) { node_visible_idxs.insert(p_idx); }
 	_FORCE_INLINE_ void mark_invisible(uint32_t p_idx) { node_visible_idxs.remove(p_idx); }
+	_FORCE_INLINE_ bool is_enabled(uint32_t p_idx) const { return node_entities[p_idx].enabled; }
+	_FORCE_INLINE_ bool is_registered(uint32_t p_idx) const { return node_entities[p_idx].registered; }
 
 	template <std::invocable<uint32_t> Fn>
 	void for_each_dirty_and_visible(const Fn &fn) const {
@@ -219,18 +221,34 @@ public:
 	_FORCE_INLINE_ GodotRealityKit::Entity get_entity(uint32_t p_idx) const { return node_entities[p_idx].entity; }
 	_FORCE_INLINE_ godot::Transform3D get_transform(uint32_t p_idx) const { return node_transform_states[p_idx]; }
 
+	void update_transform_ifn(uint32_t p_idx);
+	void update_transforms();
 	void update(const ResourceLoaderSet &p_resource_loaders);
 
-private:
-	void _on_visibility_changed(uint32_t p_idx) {
+protected:
+	inline void _visibility_changed(uint32_t p_idx) {
 		const bool enabled = Base::nodes[p_idx]->is_visible_in_tree();
-		node_entities[p_idx].entity.setEnabled(enabled);
+		if (enabled != node_entities[p_idx].enabled) {
+			node_entities[p_idx].enabled = enabled;
+			static_cast<Derived *>(this)->_on_visibility_changed(p_idx);
+		}
+	}
+	inline void _on_visibility_changed(uint32_t p_idx) {
+		if (node_entities[p_idx].registered) {
+			node_entities[p_idx].entity.setEnabled(node_entities[p_idx].enabled);
+		}
+
+		if (node_entities[p_idx].enabled) {
+			update_transform_ifn(p_idx);
+		}
 	}
 
-protected:
+	void _on_enabled_changed(uint32_t, bool, bool) {}
+
 	struct Entity {
 		GodotRealityKit::Entity entity = GodotRealityKit::Entity::init();
 		bool registered = false;
+		bool enabled = false;
 	};
 
 	godot::LocalVector<Entity> node_entities;

@@ -109,7 +109,7 @@ void MaterialExporter::export_visual_shader(const godot::String &p_path) {
 
 	if (usda_data.size() == 0 || metadata_data.size() == 0) {
 		print_line("MaterialExporter: Exporting resource (existing " + existing_hash + " != current " + hash + ") : " + p_path);
-		VisualProgramBuilder builder(compiler, shader);
+		VisualProgramBuilder builder(compiler, ShaderMaterialDescription(shader));
 		swift::Array<GodotRealityKit::ProgramPart> program_parts = swift::Array<GodotRealityKit::ProgramPart>::init();
 
 		bool success = builder.build(program_parts);

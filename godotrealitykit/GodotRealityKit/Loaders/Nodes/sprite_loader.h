@@ -39,6 +39,9 @@ public:
 
 	void update_deps(ResourceLoaderSet &p_resource_loaders);
 
+	void update_dirty_flags(const ResourceLoaderSet &p_resource_loaders);
+	void update_deps_usage(ResourceLoaderSet &p_resource_loaders) const;
+
 	void update(const ResourceLoaderSet &p_resource_loaders);
 
 private:
@@ -47,7 +50,7 @@ private:
 		uint32_t material_hash = 0;
 	};
 
-	MeshDependencyList mesh_deps;
+	DependencyList mesh_deps;
 	DependencyList material_deps;
 
 	godot::LocalVector<int32_t> sprite_frames;

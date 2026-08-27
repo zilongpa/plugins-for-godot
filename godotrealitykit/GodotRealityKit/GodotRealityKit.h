@@ -93,6 +93,11 @@ typedef NS_ENUM(NSUInteger, WorldEnvironmentConversion) {
 	kDisable
 };
 
+typedef NS_ENUM(NSUInteger, ControllerHand) {
+	kLeftHand,
+	kRightHand
+};
+
 #if TARGET_OS_OSX
 using GDRKColor = NSColor;
 #else
@@ -108,14 +113,16 @@ public:
 	}
 
 	void printError(const char *p_msg);
+	void printWarning(const char *p_msg);
 
 	struct ExtensionSettings {
 		bool handlesGameControllerEvents;
 		PresentationStyle presentationStyle;
 		ImmersionStyle immersionStyle;
-		WorldEnvironmentConversion worldenvironment;
+		WorldEnvironmentConversion world_environment;
+		float portalWorldScale; // 0 means unset; use the interactive slider instead.
 
-		bool should_convert_worldenvironment() const;
+		bool should_convert_world_environment() const;
 	};
 
 	ExtensionSettings getExtensionSettings() const;
@@ -141,6 +148,21 @@ public:
 #endif
 
 	GDRKTransform getXROrigin() const;
+
+	// True while the shared-volume controller XR interface is running, i.e. the presentation
+	// style is a shared volume and controller tracking is enabled. Only then is it worth
+	// anchoring the controllers, since nothing else consumes their poses.
+	bool wantsControllerAnchors() const;
+
+	// Push a spatial controller's AnchorEntity(.accessory) transform, in scene-root-local
+	// space, to the shared-volume controller XR interface. Ignored when that interface isn't
+	// running.
+	void setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const;
+
+	// Sample a spatial controller's buttons / thumbstick and publish them on the shared-volume
+	// controller XR interface. p_gc_controller is the GCController as an opaque pointer. Ignored
+	// when that interface isn't running.
+	void setControllerInput(ControllerHand p_hand, void *p_gc_controller) const;
 
 	void onEntityPressUpdate(int64_t p_event_id,
 			bool p_ended,

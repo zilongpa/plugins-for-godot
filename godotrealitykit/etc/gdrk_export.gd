@@ -29,6 +29,15 @@ func _supports_platform(platform) -> bool:
 func _get_features(platform, debug) -> PackedStringArray:
 	return PackedStringArray(["gdrk"])
 
+func _get_export_options_overrides(platform: EditorExportPlatform) -> Dictionary:
+	if platform is not EditorExportPlatformVisionOS:
+		return {}
+	else:
+		return {
+			"custom_template/debug": "./addons/GodotRealityKit/visionos.template_debug/godot_visionos.zip",
+			"custom_template/release": "./addons/GodotRealityKit/visionos.template_release/godot_visionos.zip"
+		}
+
 func _export_begin(features: PackedStringArray, is_debug: bool, path: String, flags: int) -> void:
 	_pending_visionos_path = path if features.has("visionos") else ""
 
@@ -37,10 +46,6 @@ func _export_end() -> void:
 		return
 	var path := _pending_visionos_path
 	_pending_visionos_path = ""
-	# The public Godot visionOS template hard-codes UIApplicationSupportsMultipleScenes=false
-	# in windowed (app_role=0) mode. RealityKit-backed scenes need this true so the plugin
-	# can open additional UIWindowScenes at runtime. Patch the generated Info.plist in
-	# place — this is a no-op on builds whose template already sets it to true.
 	var plist_path := _resolve_visionos_info_plist(path)
 	if plist_path.is_empty():
 		return
@@ -50,23 +55,59 @@ func _export_end() -> void:
 		return
 	var contents := f.get_as_text()
 	f.close()
+
 	var false_marker := "<key>UIApplicationSupportsMultipleScenes</key><false/>"
-	if not contents.contains(false_marker):
-		if not contents.contains("UIApplicationSupportsMultipleScenes"):
-			push_warning("GDRK export: UIApplicationSupportsMultipleScenes not found in %s" % plist_path)
-		return
-	contents = contents.replace(false_marker, "<key>UIApplicationSupportsMultipleScenes</key><true/>")
+	if contents.contains(false_marker):
+		contents = contents.replace(false_marker, "<key>UIApplicationSupportsMultipleScenes</key><true/>")
+		print("GDRK export: set UIApplicationSupportsMultipleScenes=true in %s" % plist_path)
+	elif not contents.contains("UIApplicationSupportsMultipleScenes"):
+		push_warning("GDRK export: UIApplicationSupportsMultipleScenes not found in %s" % plist_path)
+
+	var closing_marker := "</dict>\n</plist>"
+
+	# Every GodotRealityKit view (volumetric window, portal, or immersive space) installs a
+	# SpatialEventGesture on scene entities, which makes RealityKit implicitly start an
+	# ARKitSession and request world-sensing authorization. This is unconditional: it happens
+	# regardless of presentation style or project settings.
+	if not contents.contains("NSWorldSensingUsageDescription"):
+		contents = _add_usage_description(
+			contents, plist_path, closing_marker,
+			"NSWorldSensingUsageDescription",
+			"Used to detect and understand the surrounding space for content placement."
+		)
+
+	var hand_tracking_enabled: bool = ProjectSettings.get_setting("xr/visionos/enable_hand_tracking", false)
+	if hand_tracking_enabled and not contents.contains("NSHandsTrackingUsageDescription"):
+		contents = _add_usage_description(
+			contents, plist_path, closing_marker,
+			"NSHandsTrackingUsageDescription",
+			"Used to track hand position and gestures for interacting with content."
+		)
+
+	var controller_tracking_enabled: bool = ProjectSettings.get_setting("xr/visionos/enable_controller_tracking", false)
+	if controller_tracking_enabled and not contents.contains("NSAccessoryTrackingUsageDescription"):
+		contents = _add_usage_description(
+			contents, plist_path, closing_marker,
+			"NSAccessoryTrackingUsageDescription",
+			"Used to track spatial controllers for interacting with content."
+		)
+
 	var w := FileAccess.open(plist_path, FileAccess.WRITE)
 	if w == null:
 		push_warning("GDRK export: cannot write %s (err %d)" % [plist_path, FileAccess.get_open_error()])
 		return
 	w.store_string(contents)
 	w.close()
-	print("GDRK export: set UIApplicationSupportsMultipleScenes=true in %s" % plist_path)
+
+func _add_usage_description(contents: String, plist_path: String, closing_marker: String, key: String, value: String) -> String:
+	if not contents.contains(closing_marker):
+		push_warning("GDRK export: could not find closing </dict></plist> in %s" % plist_path)
+		return contents
+	var addition := "\t<key>%s</key>\n\t<string>%s</string>\n" % [key, value]
+	print("GDRK export: added %s to %s" % [key, plist_path])
+	return contents.replace(closing_marker, addition + closing_marker)
 
 func _resolve_visionos_info_plist(export_path: String) -> String:
-	# visionOS xcodeproj export produces <dir>/<name>.xcodeproj alongside
-	# <dir>/<name>/<name>-Info.plist (Godot renames godot_apple_embedded → <name>).
 	var project_dir := export_path.get_base_dir()
 	var binary_name := export_path.get_file().get_basename()
 	var candidate := "%s/%s/%s-Info.plist" % [project_dir, binary_name, binary_name]

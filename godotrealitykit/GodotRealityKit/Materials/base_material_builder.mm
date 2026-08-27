@@ -286,6 +286,7 @@ bool BaseMaterialBuilder::build(swift::Array<GodotRealityKit::ProgramPart> &p_pr
 
 	// MARK: Geometry Modifier
 
+	bool use_default_position = true;
 	SG(
 
 			let position = position_attribute;
@@ -297,6 +298,7 @@ bool BaseMaterialBuilder::build(swift::Array<GodotRealityKit::ProgramPart> &p_pr
 			d.billboard_mode != BM::BillboardMode::BILLBOARD_PARTICLES);
 
 	if (d.billboard_mode != BM::BillboardMode::BILLBOARD_DISABLED) {
+		use_default_position = false;
 		SG(
 				let godot_to_rk_scale =
 						ND_realitykit_combine4_matrix44(ND_combine4_vector4(v3_x(_world_scale), 0.0f, 0.0f, 0.0f),
@@ -422,9 +424,16 @@ bool BaseMaterialBuilder::build(swift::Array<GodotRealityKit::ProgramPart> &p_pr
 					ND_swizzle_vector3_vector2(uv2_offset, "xy"));
 
 			let ua4 = (0.0f, 0.0f, 0.0f, 0.0f);
-			let ua5 = (0.0f, 0.0f, 0.0f, 0.0f);
-			let position_offset = compute_position_offset(position);
-			let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(position_offset, color, normal, bitangent, uv1, uv2, uv1_triplanar_pos_f4, uv1_power_normal_f4, uv2_triplanar_pos_f4, uv2_power_normal_f4, ua4, ua5);)
+			let ua5 = (0.0f, 0.0f, 0.0f, 0.0f););
+
+	if (use_default_position) {
+		SG(
+				let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(-, color, normal, bitangent, uv1, uv2, uv1_triplanar_pos_f4, uv1_power_normal_f4, uv2_triplanar_pos_f4, uv2_power_normal_f4, ua4, ua5);)
+	} else {
+		SG(
+				let position_offset = compute_position_offset(position);
+				let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(position_offset, color, normal, bitangent, uv1, uv2, uv1_triplanar_pos_f4, uv1_power_normal_f4, uv2_triplanar_pos_f4, uv2_power_normal_f4, ua4, ua5);)
+	}
 
 	// MARK: Surface Shader
 
@@ -710,7 +719,10 @@ void BaseMaterialBuilder::finalize(const BaseMaterial3DDescription &p_descriptio
 	const int sort_order = -p_description.render_priority;
 	const bool is_billboard = p_description.billboard_mode != BM::BILLBOARD_DISABLED;
 	const float bounds_multiplier = is_billboard && !p_description.get_flag(BM::FLAG_BILLBOARD_KEEP_SCALE) ? 100.0f : 1.0f;
-	p_program.setTransparent(is_transparent);
+	if (is_transparent) {
+		p_program.setSortGroup(p_description.use_depth_postpass ? 2 : 1); // depth postPass vs. standard transparency
+	}
+
 	p_program.setSortOrder(sort_order);
 	p_program.setBillboard(is_billboard);
 	p_program.setBoundsMultiplier(bounds_multiplier);

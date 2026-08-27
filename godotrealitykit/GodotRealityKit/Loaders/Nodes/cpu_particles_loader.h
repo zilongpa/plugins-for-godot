@@ -35,10 +35,13 @@ public:
 
 	void update_deps(ResourceLoaderSet &p_resource_loaders);
 
+	void update_dirty_flags(const ResourceLoaderSet &p_resource_loaders);
+	void update_deps_usage(ResourceLoaderSet &p_resource_loaders) const;
+
 	void update(const ResourceLoaderSet &p_resource_loaders);
 
 private:
-	MeshDependencyList mesh_deps;
+	DependencyList mesh_deps;
 	DependencyList multimesh_deps;
 	DependencyList material_deps;
 

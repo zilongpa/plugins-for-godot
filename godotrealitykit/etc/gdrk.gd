@@ -17,9 +17,11 @@ var material_export: EditorExportPlugin = MaterialEditorExportPlugin.new()
 
 const VolumeCameraGizmoPlugin = preload("res://addons/GodotRealityKit/volume_camera_gizmo/gizmo.gd")
 const DLShadowGizmoPlugin = preload("res://addons/GodotRealityKit/directional_light_shadow_gizmo/gizmo.gd")
+const ClippingGizmoPlugin = preload("res://addons/GodotRealityKit/clipping_gizmo/gizmo.gd")
 
 var volume_camera_gizmo_plugin = VolumeCameraGizmoPlugin.new()
 var dl_shadow_gizmo_plugin = DLShadowGizmoPlugin.new()
+var clipping_gizmo_plugin = ClippingGizmoPlugin.new()
 
 func setup_setting_handles_game_controller_events():
 	var key: String = "reality_kit/handles_game_controller_events"
@@ -64,7 +66,7 @@ func setup_realitykit_immersion_style():
 	})
 
 func setup_realitykit_worldenvironment():
-	var key: String = "reality_kit/worldenvironment"
+	var key: String = "reality_kit/world_environment"
 	var default: String = "Automatic"
 	if not ProjectSettings.has_setting(key):
 		ProjectSettings.set_setting(key, default)
@@ -75,6 +77,18 @@ func setup_realitykit_worldenvironment():
 		"type": TYPE_STRING,
 		"hint": PROPERTY_HINT_ENUM,
 		"hint_string": "Automatic,Enable,Disable"
+	})
+
+func setup_realitykit_portal_world_scale():
+	var key: String = "reality_kit/portal_presentation_world_scale"
+	var default: float = 0.0
+	if not ProjectSettings.has_setting(key):
+		ProjectSettings.set_setting(key, default)
+	ProjectSettings.set_initial_value(key, default)
+
+	ProjectSettings.add_property_info({
+		"name": key,
+		"type": TYPE_FLOAT
 	})
 
 func setup_debug_rendering_on_macos():
@@ -96,21 +110,24 @@ func _init():
 	setup_realitykit_presentation_style()
 	setup_realitykit_immersion_style()
 	setup_realitykit_worldenvironment()
+	setup_realitykit_portal_world_scale()
 	setup_debug_rendering_on_macos()
 
 func _enter_tree():
 	add_node_3d_gizmo_plugin(volume_camera_gizmo_plugin)
 	add_node_3d_gizmo_plugin(dl_shadow_gizmo_plugin)
+	add_node_3d_gizmo_plugin(clipping_gizmo_plugin)
 	EditorInterface.get_selection().selection_changed.connect(_on_selection_changed)
 
 func _exit_tree():
 	remove_node_3d_gizmo_plugin(volume_camera_gizmo_plugin)
 	remove_node_3d_gizmo_plugin(dl_shadow_gizmo_plugin)
+	remove_node_3d_gizmo_plugin(clipping_gizmo_plugin)
 	EditorInterface.get_selection().selection_changed.disconnect(_on_selection_changed)
 
 func _on_selection_changed() -> void:
 	for node in EditorInterface.get_selection().get_selected_nodes():
-		if node.get_class() == "RealityKitDirectionalLightShadow3D":
+		if node.get_class() == "RealityKitDirectionalLightShadow3D" or node.get_class() == "RealityClipping3D":
 			node.update_gizmos()
 
 func _enable_plugin() -> void:

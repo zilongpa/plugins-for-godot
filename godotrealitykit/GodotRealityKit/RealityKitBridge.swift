@@ -12,11 +12,12 @@
 import RealityKit
 import Spatial
 import SwiftUI
-import GameController
+@preconcurrency import GameController
 
 #if os(macOS)
 import AppKit
 #else
+import ARKit
 import AVFoundation
 import Combine
 import UIKit
@@ -247,7 +248,8 @@ class PortalRealityViewState {
 
 // Workaround for : RealityKit's RealityView does not receive
 // .handlesGameControllerEvents when the gaze target is inside the view (e.g.
-// the portal surface). A collision cage around the view
+// the portal surface), because the GC input remote effect is applied on a
+// layer upstream from the CA hit-test leaf. A collision cage around the view
 // provides a valid hit-test destination so gamepad events reach the app.
 private func createGamepadInputCagePlane(
         size: SIMD3<Float>,
@@ -302,7 +304,16 @@ struct PortalRealityView : View {
     @State private var interactionTarget: RealityKit.Entity?
 
     var worldScale: Float {
+        let fixedWorldScale = self.fixedWorldScale
+        if fixedWorldScale != 0 {
+            return fixedWorldScale
+        }
         return 1.0 / pow(10.0, self.worldScaleExponent)
+    }
+
+    // Set via reality_kit/portal_presentation_world_scale; 0 means unset, use the interactive slider instead.
+    private var fixedWorldScale: Float {
+        delegate?.getExtensionSettings().portalWorldScale ?? 0
     }
 
     private var handlesGameControllerEvents: Bool {
@@ -361,10 +372,13 @@ struct PortalRealityView : View {
             .offset(z: -(proxy.size.depth / 2) + 1)
             .realityViewLayoutBehavior(.centered)
         }
-        Slider(value: $worldScaleExponent, in: -8.0 ... 8.0, label: { Text("World Scale") })
-            .onChange(of: self.worldScale) {
-                self.delegate?.onWorldScaleChanged(self.worldScale)
-            }
+        if self.fixedWorldScale == 0 {
+            Slider(value: $worldScaleExponent, in: -8.0 ... 8.0, label: { Text("World Scale") })
+                .padding()
+                .onChange(of: self.worldScale) {
+                    self.delegate?.onWorldScaleChanged(self.worldScale)
+                }
+        }
     }
 
     private func onSceneUpdate(event: SceneEvents.Update) {
@@ -397,26 +411,28 @@ extension SwiftUI.View {
     }
 }
 
+@Observable
 class ImmersiveRealityViewState {
+    @MainActor static let shared = ImmersiveRealityViewState()
     var lastScale: SIMD3<Float>? = nil
+    var hasInputTargets: Bool = false
 }
 
 // Shows the Godot scene in an immersive space
 struct ImmersiveRealityView : View {
     let root: RealityKit.Entity
     let delegate: GDRKBridgeDelegate?
-
-    let anchor = RealityKit.Entity()
     
     let state = ImmersiveRealityViewState()
 
     @State private var subscription: EventSubscription? = nil
 
     public var body: some View {
+        // Read sceneReady so toggling it triggers a body re-evaluation.
+        let _ = state.hasInputTargets
         GeometryReader3D{ proxy in
             RealityView(make: { content in
-                self.anchor.addChild(self.root)
-                content.add(self.anchor)
+                content.add(self.root)
                 self.subscription = content.subscribe(to: SceneEvents.Update.self, self.onSceneUpdate)
             }, update: { content in
             })
@@ -429,13 +445,14 @@ struct ImmersiveRealityView : View {
         if let xrOrigin = delegate?.getXROrigin() {
             if xrOrigin.scale != state.lastScale {
                 // Assuming all scale components are the same
-                delegate?.onWorldScaleChanged(1.0 / xrOrigin.scale.min())
+                delegate?.onWorldScaleChanged(xrOrigin.scale.min())
                 state.lastScale = xrOrigin.scale
             }
-            
-            let gdOrigin = Transform(scale: xrOrigin.scale, rotation: xrOrigin.orientation, translation: xrOrigin.position)
-            let rkOrigin = self.root.convert(transform: gdOrigin, to: self.anchor)
-            self.anchor.components.set(Transform(matrix: rkOrigin.matrix.inverse))
+
+            let worldScale = xrOrigin.scale
+            let worldRotation = xrOrigin.orientation.inverse
+            let worldTranslation = -worldScale * simd_act(worldRotation, xrOrigin.position)
+            self.root.components.set(Transform(scale: worldScale, rotation: worldRotation, translation: worldTranslation))
         }
     }
 }
@@ -444,6 +461,18 @@ class SharedVolumetricRealityViewState {
     var lastCameraTransform: Transform? = nil
     var lastViewBounds: BoundingBox? = nil
     var lastScale: Float? = nil
+
+    // Spatial-accessory anchoring state.
+    var spatialTrackingSession: SpatialTrackingSession? = nil
+    var connectObserver: NSObjectProtocol? = nil
+    var pendingControllers: [GCController] = []
+    // An AnchorEntity(.accessory) resolves asynchronously, but content.add() has to run
+    // synchronously in the update closure, so resolved anchors wait here until the next tick.
+    var resolvedAnchors: [ControllerHand: AnchorEntity] = [:]
+    var anchors: [ControllerHand: AnchorEntity] = [:]
+    // The GCController anchored per hand, polled each frame for button / thumbstick input.
+    var controllers: [ControllerHand: GCController] = [:]
+    var trackingStarted: Bool = false
 }
 
 // Shows the Godot scene in a volumetric window.
@@ -471,6 +500,7 @@ struct SharedVolumetricRealityView : View {
                    let viewBounds = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
                    self.updateCamera(viewBounds: viewBounds)
                    self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
+                   self.updateAccessoryAnchors(content: content)
             })
              .installGestures(delegate: self.delegate, root: self.root, size: proxy.size)
             .realityViewLayoutBehavior(.flexible)
@@ -478,10 +508,131 @@ struct SharedVolumetricRealityView : View {
         }
     }
 
+    // Keeps an AnchorEntity(.accessory) attached to each connected spatial controller. Runs only
+    // while the engine's shared-volume controller interface is live, which is what keeps
+    // accessory tracking off in other presentation styles and when controller tracking is
+    // disabled.
+    private func updateAccessoryAnchors(content: RealityViewContent) {
+        guard self.delegate?.wantsControllerAnchors() ?? false else { return }
+
+        self.startAccessoryTrackingIfNeeded()
+
+        for (hand, anchor) in self.state.resolvedAnchors {
+            // Each connect gives the controller a new accessory identity, so the newest resolved
+            // anchor replaces what is installed; the one it replaces can no longer track.
+            if let stale = self.state.anchors[hand] {
+                content.remove(stale)
+            }
+            content.add(anchor)
+            self.state.anchors[hand] = anchor
+        }
+        self.state.resolvedAnchors.removeAll()
+
+        self.resolvePendingControllers()
+    }
+
+    // Starts the accessory tracking session and queues the spatial controllers for anchoring;
+    // an AnchorEntity(.accessory) only resolves once a live session is running.
+    private func startAccessoryTrackingIfNeeded() {
+        guard !self.state.trackingStarted else { return }
+        self.state.trackingStarted = true
+
+        Task { @MainActor in
+            let session = SpatialTrackingSession()
+            _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
+            self.state.spatialTrackingSession = session
+        }
+
+        self.state.connectObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.GCControllerDidConnect,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let controller = notification.object as? GCController,
+                  controller.productCategory == GCProductCategorySpatialController else { return }
+            self.state.pendingControllers.append(controller)
+        }
+
+        for controller in GCController.controllers()
+        where controller.productCategory == GCProductCategorySpatialController {
+            self.state.pendingControllers.append(controller)
+        }
+    }
+
+    // Resolves an anchoring source per queued controller and stages the resulting anchor for the
+    // next update tick.
+    private func resolvePendingControllers() {
+        guard !self.state.pendingControllers.isEmpty else { return }
+        let controllers = self.state.pendingControllers
+        self.state.pendingControllers.removeAll()
+
+        for controller in controllers {
+            Task { @MainActor in
+                do {
+                    let source = try await AnchoringComponent.AccessoryAnchoringSource(device: controller)
+                    guard let hand = Self.hand(of: source) else {
+                        NSLog("[GDRK] accessory anchor: controller reports no chirality; ignoring")
+                        return
+                    }
+                    // The startup scan and the connect notification can queue the same controller
+                    // twice, so bail if this device is anchored — but let a different one replace it.
+                    if let anchored = self.state.controllers[hand], anchored === controller {
+                        return
+                    }
+                    guard let location = source.locationName(named: "grip") else {
+                        NSLog("[GDRK] accessory anchor: no 'grip' location for controller")
+                        return
+                    }
+                    self.state.resolvedAnchors[hand] = AnchorEntity(.accessory(from: source, location: location),
+                                                                    trackingMode: .predicted)
+                    self.state.controllers[hand] = controller
+                } catch {
+                    NSLog("[GDRK] AccessoryAnchoringSource init failed: \(error)")
+                }
+            }
+        }
+    }
+
+    // Spatial controllers come as a handed pair, so the accessory's inherent chirality is the
+    // hand it is held in.
+    private static func hand(of source: AnchoringComponent.AccessoryAnchoringSource) -> ControllerHand? {
+        switch source.underlyingAccessory?.inherentChirality {
+        case .left: return .leftHand
+        case .right: return .rightHand
+        default: return nil
+        }
+    }
+
+    // Pushes each anchored controller's scene-root-local transform to the engine, once per frame.
+    private func publishControllerPoses() {
+        guard let delegate = self.delegate, !self.state.anchors.isEmpty else { return }
+
+        for (hand, anchor) in self.state.anchors {
+            let t = Transform(matrix: anchor.transformMatrix(relativeTo: self.root))
+            delegate.setControllerAnchor(hand, GDRKTransform(
+                scale: t.scale,
+                position: t.translation,
+                orientation: t.rotation
+            ), anchor.isAnchored)
+        }
+    }
+
+    // Pushes each anchored controller to the engine once per frame; the engine samples its
+    // buttons / thumbstick (via GameController) so XRController3D's button_pressed keeps working.
+    private func publishControllerInputs() {
+        guard let delegate = self.delegate, !self.state.controllers.isEmpty else { return }
+
+        for (hand, controller) in self.state.controllers {
+            delegate.setControllerInput(hand, Unmanaged.passUnretained(controller).toOpaque())
+        }
+    }
+
     private func onSceneUpdate(event: SceneEvents.Update) {
         if let viewBounds = self.state.lastViewBounds {
             self.updateCamera(viewBounds: viewBounds)
         }
+        self.publishControllerPoses()
+        self.publishControllerInputs()
     }
 
     private func updateCamera(viewBounds: BoundingBox) {
@@ -610,14 +761,46 @@ class GodotViewController: UIViewController {
 
     @objc
     func update() {
+        // The problem: inside drawView, Godot temporarily hands control back to the system's main
+        // run loop (the mechanism iOS uses to process events like touches, timers, and other
+        // callbacks while an app is idle) so that any input events waiting to be delivered get
+        // handled immediately, instead of waiting until drawView returns. Godot pauses its own
+        // CADisplayLink first so that handing control back to the run loop can't turn around and
+        // call drawView again through its own display link. But Godot has no idea our separate
+        // CADisplayLink exists, so it doesn't pause it. That means while control is handed back to
+        // the run loop, our CADisplayLink can fire, which calls update(), which calls drawView
+        // again - all before the first drawView call has returned. That inner drawView call does
+        // the exact same thing, calling drawView a third time, and so on, forever, until the app
+        // runs out of stack space and crashes.
+        // The fix: pause our own CADisplayLink before calling drawView, the same way Godot pauses
+        // its own, so it can't fire again while we're still inside drawView. Resume it once
+        // drawView returns.
+        displayLink?.isPaused = true
+
         if let godotView = godotViewController?.view {
+            // If the view was active, it means that the a display link is installed to update the
+            // view. To remove it, we call `stopRendering`
+            let viewIsActive: Bool =  godotView.value(forKey: "isActive") as! Bool
+            if (viewIsActive) {
+                if godotView.responds(to: Selector(("stopRendering"))) {
+                    godotView.perform(Selector(("stopRendering")))
+                } else {
+                    print("GodotRealityKit Error: missing function 'stopRendering' on Godot's GDTView")
+                }
+            }
+            
+            // The GDTView drawView will only run if `isActive` is true. So we force it here
+            // and reverse it back after the view has been updated.
             godotView.setValue(true, forKey: "isActive")
             if godotView.responds(to: Selector(("drawView"))) {
                 godotView.perform(Selector(("drawView")))
             } else {
                 print("GodotRealityKit Error: missing function 'drawView' on Godot's GDTView")
             }
+            godotView.setValue(false, forKey: "isActive")
         }
+
+        displayLink?.isPaused = false
     }
 
     func stopRendering() {
@@ -697,18 +880,7 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
     }
 
     public func sceneDidBecomeActive(_ scene: UIScene) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? AVAudioSession.sharedInstance().setActive(true)
-        }
-        let sel = Selector(("sceneDidBecomeActive:"))
-        if let appDelegate = UIApplication.shared.delegate,
-           appDelegate.responds(to: sel) {
-            appDelegate.perform(sel, with: scene)
-        }
-        if let godotView = Bridge.originalViewController?.view,
-           godotView.responds(to: Selector(("stopRendering"))) {
-            godotView.perform(Selector(("stopRendering")))
-        }
+        Bridge.resumeGodotAudioAfterActivatingSession()
     }
 
     public func sceneWillResignActive(_ scene: UIScene) {
@@ -892,6 +1064,18 @@ public class Bridge {
             // Set the original godot plain window to a simple view showing just the loading screen
             // Setting the root view controller here secretly unlinks the display link, stopping the game loop
             originalScene.keyWindow?.rootViewController = LoadingViewController()
+
+            NotificationCenter.default.addObserver(
+                forName: Self.relaunchNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        Bridge.reattachAfterRelaunch()
+                    }
+                }
+            }
         }
 #endif
     }
@@ -903,4 +1087,47 @@ public class Bridge {
     public static func isSceneVisible() -> Bool {
         MainActor.assumeIsolated{ Self.sceneVisible }
     }
+
+#if !os(macOS)
+    public static let relaunchNotification = Notification.Name("GDRKRendererRelaunchDetected")
+
+    @MainActor
+    static func reattachAfterRelaunch() {
+        let windowScenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let candidate = windowScenes.first { scene in
+            guard !(scene.delegate is BridgeScene) else { return false }
+            guard let root = scene.keyWindow?.rootViewController else { return false }
+            return !(root is LoadingViewController)
+        }
+
+        guard let newScene = candidate else {
+            print("GodotRealityKit: relaunch guard could not find a godot UIWindowScene to reattach")
+            return
+        }
+
+        Self.originalScene = newScene
+        newScene.keyWindow?.rootViewController = LoadingViewController()
+    }
+
+    static func resumeGodotAudioAfterActivatingSession() {
+        let sel = Selector(("sceneDidBecomeActive:"))
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("GodotRealityKit: failed to activate audio session before resuming Godot audio: \(error)")
+            }
+            DispatchQueue.main.async {
+                guard let appDelegate = UIApplication.shared.delegate,
+                      appDelegate.responds(to: sel) else {
+                    return
+                }
+                let activeScene = UIApplication.shared.connectedScenes.first {
+                    $0.activationState == .foregroundActive
+                } ?? UIApplication.shared.connectedScenes.first
+                appDelegate.perform(sel, with: activeScene)
+            }
+        }
+    }
+#endif
 }

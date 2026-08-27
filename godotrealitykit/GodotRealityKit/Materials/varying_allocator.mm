@@ -173,6 +173,9 @@ std::string VaryingAllocator::get_vertex_expression_for_uv(uint8_t p_index) cons
 	static uint8_t uv_size_by_uv_index[8] = { 2, 2, 4, 4, 4, 4, 4, 4 };
 	uint8_t uv_start_offset = slot_offset_by_uv_index[p_index];
 
+	if (uv_start_offset >= free_slot_pointer) {
+		return "-";
+	}
 	if (uv_size_by_uv_index[p_index] == 2) {
 		return std::format("ND_combine2_vector2({}, {})", get_vertex_slot_expression(uv_start_offset + 0),
 				get_vertex_slot_expression(uv_start_offset + 1));

@@ -11,10 +11,222 @@
 
 #include "program_description.h"
 
+#include "utility.h"
+
 #include <format>
 
 using namespace gdrk;
 using BM = godot::BaseMaterial3D;
+using RMD = gdrk::RenderModeDescription;
+
+namespace {
+
+template <RMD::MultiMode M>
+const godot::StringName &multi_mode_property_name();
+
+#define DEFINE_MULTI_MODE_PROPERTY(enum_value, name_literal)               \
+	template <>                                                            \
+	const godot::StringName &multi_mode_property_name<RMD::enum_value>() { \
+		static const godot::StringName name("modes/" name_literal);        \
+		return name;                                                       \
+	}
+
+DEFINE_MULTI_MODE_PROPERTY(MULTI_BLEND, "blend")
+DEFINE_MULTI_MODE_PROPERTY(MULTI_DEPTH_DRAW, "depth_draw")
+DEFINE_MULTI_MODE_PROPERTY(MULTI_DEPTH_TEST, "depth_test")
+DEFINE_MULTI_MODE_PROPERTY(MULTI_CULL, "cull")
+DEFINE_MULTI_MODE_PROPERTY(MULTI_DIFFUSE, "diffuse")
+DEFINE_MULTI_MODE_PROPERTY(MULTI_SPECULAR, "specular")
+
+#undef DEFINE_MULTI_MODE_PROPERTY
+
+DEFINE_ENUM_FUNCTION_TABLE(multi_mode_property_names, RMD::MultiMode, MULTI_MAX, multi_mode_property_name)
+
+template <RMD::Flag F>
+const godot::StringName &flag_property_name();
+
+#define DEFINE_FLAG_PROPERTY(enum_value, name_literal)               \
+	template <>                                                      \
+	const godot::StringName &flag_property_name<RMD::enum_value>() { \
+		static const godot::StringName name("flags/" name_literal);  \
+		return name;                                                 \
+	}
+
+DEFINE_FLAG_PROPERTY(FLAG_DEPTH_PREPASS_ALPHA, "depth_prepass_alpha")
+DEFINE_FLAG_PROPERTY(FLAG_DEPTH_TEST_DISABLED, "depth_test_disabled")
+DEFINE_FLAG_PROPERTY(FLAG_SSS_MODE_SKIN, "sss_mode_skin")
+DEFINE_FLAG_PROPERTY(FLAG_UNSHADED, "unshaded")
+DEFINE_FLAG_PROPERTY(FLAG_WIREFRAME, "wireframe")
+DEFINE_FLAG_PROPERTY(FLAG_SKIP_VERTEX_TRANSFORM, "skip_vertex_transform")
+DEFINE_FLAG_PROPERTY(FLAG_WORLD_VERTEX_COORDS, "world_vertex_coords")
+DEFINE_FLAG_PROPERTY(FLAG_ENSURE_CORRECT_NORMALS, "ensure_correct_normals")
+DEFINE_FLAG_PROPERTY(FLAG_SHADOWS_DISABLED, "shadows_disabled")
+DEFINE_FLAG_PROPERTY(FLAG_AMBIENT_LIGHT_DISABLED, "ambient_light_disabled")
+DEFINE_FLAG_PROPERTY(FLAG_SHADOW_TO_OPACITY, "shadow_to_opacity")
+DEFINE_FLAG_PROPERTY(FLAG_VERTEX_LIGHTING, "vertex_lighting")
+DEFINE_FLAG_PROPERTY(FLAG_PARTICLE_TRAILS, "particle_trails")
+DEFINE_FLAG_PROPERTY(FLAG_ALPHA_TO_COVERAGE, "alpha_to_coverage")
+DEFINE_FLAG_PROPERTY(FLAG_ALPHA_TO_COVERAGE_AND_ONE, "alpha_to_coverage_and_one")
+DEFINE_FLAG_PROPERTY(FLAG_DEBUG_SHADOW_SPLITS, "debug_shadow_splits")
+DEFINE_FLAG_PROPERTY(FLAG_FOG_DISABLED, "fog_disabled")
+DEFINE_FLAG_PROPERTY(FLAG_SPECULAR_OCCLUSION_DISABLED, "specular_occlusion_disabled")
+
+#undef DEFINE_FLAG_PROPERTY
+
+DEFINE_ENUM_FUNCTION_TABLE(flag_property_names, RMD::Flag, FLAG_MAX, flag_property_name)
+
+inline uint8_t read_multi_mode(const godot::Ref<godot::VisualShader> &p_shader, RMD::MultiMode p_mode) {
+	godot::Variant v = p_shader->get(multi_mode_property_names[p_mode]());
+	return v.get_type() == godot::Variant::INT ? (uint8_t)(int32_t)v : 0;
+}
+
+inline bool read_flag(const godot::Ref<godot::VisualShader> &p_shader, RMD::Flag p_flag) {
+	godot::Variant v = p_shader->get(flag_property_names[p_flag]());
+	return v.get_type() == godot::Variant::BOOL && (bool)v;
+}
+
+} //namespace
+
+RenderModeDescription RenderModeDescription::from_visual_shader(const godot::Ref<godot::VisualShader> &p_shader) {
+	RenderModeDescription desc;
+	if (p_shader.is_null()) {
+		return desc;
+	}
+
+	desc.blend = read_multi_mode(p_shader, MULTI_BLEND);
+	desc.depth_draw = read_multi_mode(p_shader, MULTI_DEPTH_DRAW);
+	desc.depth_test = read_multi_mode(p_shader, MULTI_DEPTH_TEST);
+	desc.cull = read_multi_mode(p_shader, MULTI_CULL);
+	desc.diffuse = read_multi_mode(p_shader, MULTI_DIFFUSE);
+	desc.specular = read_multi_mode(p_shader, MULTI_SPECULAR);
+
+	for (uint8_t i = 0; i < FLAG_MAX; i++) {
+		desc.set_flag((Flag)i, read_flag(p_shader, (Flag)i));
+	}
+
+	return desc;
+}
+
+std::string RenderModeDescription::to_string() const {
+	auto blend_str = [&]() -> const char * {
+		switch (blend) {
+			case BLEND_MIX:
+				return "mix";
+			case BLEND_ADD:
+				return "add";
+			case BLEND_SUB:
+				return "sub";
+			case BLEND_MUL:
+				return "mul";
+			case BLEND_PREMUL_ALPHA:
+				return "premul_alpha";
+			default:
+				return "unknown";
+		}
+	};
+	auto depth_draw_str = [&]() -> const char * {
+		switch (depth_draw) {
+			case DEPTH_DRAW_OPAQUE:
+				return "opaque";
+			case DEPTH_DRAW_ALWAYS:
+				return "always";
+			case DEPTH_DRAW_NEVER:
+				return "never";
+			default:
+				return "unknown";
+		}
+	};
+	auto depth_test_str = [&]() -> const char * {
+		switch (depth_test) {
+			case DEPTH_TEST_DEFAULT:
+				return "default";
+			case DEPTH_TEST_INVERTED:
+				return "inverted";
+			default:
+				return "unknown";
+		}
+	};
+	auto cull_str = [&]() -> const char * {
+		switch (cull) {
+			case CULL_BACK:
+				return "back";
+			case CULL_FRONT:
+				return "front";
+			case CULL_DISABLED:
+				return "disabled";
+			default:
+				return "unknown";
+		}
+	};
+	auto diffuse_str = [&]() -> const char * {
+		switch (diffuse) {
+			case DIFFUSE_LAMBERT:
+				return "lambert";
+			case DIFFUSE_LAMBERT_WRAP:
+				return "lambert_wrap";
+			case DIFFUSE_BURLEY:
+				return "burley";
+			case DIFFUSE_TOON:
+				return "toon";
+			default:
+				return "unknown";
+		}
+	};
+	auto specular_str = [&]() -> const char * {
+		switch (specular) {
+			case SPECULAR_SCHLICK_GGX:
+				return "schlick_ggx";
+			case SPECULAR_TOON:
+				return "toon";
+			case SPECULAR_DISABLED:
+				return "disabled";
+			default:
+				return "unknown";
+		}
+	};
+
+	std::string flags_str;
+	for (uint8_t i = 0; i < FLAG_MAX; i++) {
+		if (!get_flag((Flag)i)) {
+			continue;
+		}
+		if (!flags_str.empty()) {
+			flags_str += ", ";
+		}
+		flags_str += godot::String(flag_property_names[i]()).utf8().get_data();
+	}
+	if (flags_str.empty()) {
+		flags_str = "none";
+	}
+
+	return std::format(
+			"RenderModeDescription {{\n"
+			"    blend:      {}\n"
+			"    depth_draw: {}\n"
+			"    depth_test: {}\n"
+			"    cull:       {}\n"
+			"    diffuse:    {}\n"
+			"    specular:   {}\n"
+			"    flags:      {}\n"
+			"  }}",
+			blend_str(), depth_draw_str(), depth_test_str(),
+			cull_str(), diffuse_str(), specular_str(),
+			flags_str);
+}
+
+std::string ShaderMaterialDescription::to_string() const {
+	return std::format(
+			"ShaderMaterialDescription {{\n"
+			"  shader_rid:       {}\n"
+			"  render_priority:  {}\n"
+			"  is_transparent:   {}\n"
+			"  render_mode:      {}\n"
+			"}}",
+			shader.is_null() ? 0 : shader->get_rid().get_id(),
+			render_priority,
+			transparent,
+			render_mode.to_string());
+}
 
 std::string BaseMaterial3DDescription::to_string() const {
 	auto shading_mode_str = [&]() -> const char * {

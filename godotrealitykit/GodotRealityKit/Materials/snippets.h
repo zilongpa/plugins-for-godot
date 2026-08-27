@@ -13,6 +13,8 @@
 
 #include <format>
 
+#include "program_description.h"
+
 #undef check
 #include <godot_cpp/variant/variant.hpp>
 
@@ -128,10 +130,27 @@ inline const char *swizzle() {
 		return "ND_" #name "_vector3(\"world\")";   \
 	}                                               \
 	}
-DEFINE_BUILTIN_EXPRESSIONS(normal)
-DEFINE_BUILTIN_EXPRESSIONS(tangent)
-DEFINE_BUILTIN_EXPRESSIONS(bitangent)
-DEFINE_BUILTIN_EXPRESSIONS(position)
+
+#define DEFINE_BUILTIN_DIRECTION_EXPRESSIONS(name)                                                                                                                                                                                                                  \
+	DEFINE_BUILTIN_EXPRESSIONS(name)                                                                                                                                                                                                                                \
+	namespace name {                                                                                                                                                                                                                                                \
+	inline const char *view() {                                                                                                                                                                                                                                     \
+		return "ND_normalize_vector3(v4_xyz(ND_multiply_matrix44_vector4(ND_realitykit_surface_world_to_view(), ND_combine4_vector4(v3_x(ND_" #name "_vector3(\"world\")), v3_y(ND_" #name "_vector3(\"world\")), v3_z(ND_" #name "_vector3(\"world\")), 0.0f))))"; \
+	}                                                                                                                                                                                                                                                               \
+	}
+
+#define DEFINE_BUILTIN_POINT_EXPRESSIONS(name)                                                                                                                                                                                                \
+	DEFINE_BUILTIN_EXPRESSIONS(name)                                                                                                                                                                                                          \
+	namespace name {                                                                                                                                                                                                                          \
+	inline const char *view() {                                                                                                                                                                                                               \
+		return "v4_xyz(ND_multiply_matrix44_vector4(ND_realitykit_surface_world_to_view(), ND_combine4_vector4(v3_x(ND_" #name "_vector3(\"world\")), v3_y(ND_" #name "_vector3(\"world\")), v3_z(ND_" #name "_vector3(\"world\")), 1.0f)))"; \
+	}                                                                                                                                                                                                                                         \
+	}
+
+DEFINE_BUILTIN_DIRECTION_EXPRESSIONS(normal)
+DEFINE_BUILTIN_DIRECTION_EXPRESSIONS(tangent)
+DEFINE_BUILTIN_DIRECTION_EXPRESSIONS(bitangent)
+DEFINE_BUILTIN_POINT_EXPRESSIONS(position)
 
 inline const char *time() {
 	return "ND_time_float()";
@@ -240,7 +259,7 @@ inline const char *cast_declarations() {
 }
 
 namespace vertex {
-inline const char *attributes() {
+inline const char *attributes_common() {
 	return R"""(
 		uniform _has_compressed_uvs : bool = false;
 		uniform _uv_scale: float4 = (0.0f, 0.0f, 0.0f, 0.0f);
@@ -294,11 +313,54 @@ inline const char *attributes() {
 
 		let position_attribute = ND_position_vector3("object");
 		let position_origin = position_attribute;
+	)""";
+}
 
+// `compute_position_offset`, `compute_normal`, and `compute_bitangent` bring the user's vertex-stage
+// outputs into the coordinate space the RealityKit geometry modifier expects (model space for
+// normal/bitangent; object-space offset relative to the original vertex for position). When
+// `skip_vertex_transform` is set the user writes these in view space, so we invert the modelview
+// (and use its transpose for the normal) to get back to model space. Otherwise they pass through.
+// The returned static std::string is safe because the program cache key includes the render flags,
+// so a render-mode change produces a different cache entry rather than reusing this string.
+inline const char *attributes(const gdrk::RenderModeDescription *render_mode_description = nullptr) {
+	const bool skip_vertex_transform = render_mode_description != nullptr &&
+			render_mode_description->get_flag(RenderModeDescription::FLAG_SKIP_VERTEX_TRANSFORM);
+
+	if (skip_vertex_transform) {
+		static const std::string s = std::string(attributes_common()) + R"""(
+		let model_to_view = ND_realitykit_geometry_modifier_model_to_view();
+		let view_to_model = ND_invertmatrix_matrix44(model_to_view);
+		let view_to_model_normal = ND_transpose_matrix44(model_to_view);
+
+		let compute_position_offset = { (position) in
+			let view_position_h = ND_combine4_vector4(v3_x(position), v3_y(position), v3_z(position), 1.0f);
+			let object_position = v4_xyz(ND_multiply_matrix44_vector4(view_to_model, view_position_h));
+			ND_subtract_vector3(object_position, position_attribute)
+		};
+
+		let compute_normal = { (normal) in
+			let normal_f4 = ND_combine4_vector4(v3_x(normal), v3_y(normal), v3_z(normal), 0.0f);
+			ND_normalize_vector3(v4_xyz(ND_multiply_matrix44_vector4(view_to_model_normal, normal_f4)))
+		};
+
+		let compute_bitangent = { (bitangent) in
+			let bitangent_f4 = ND_combine4_vector4(v3_x(bitangent), v3_y(bitangent), v3_z(bitangent), 0.0f);
+			ND_normalize_vector3(v4_xyz(ND_multiply_matrix44_vector4(view_to_model, bitangent_f4)))
+		};
+	)""";
+		return s.c_str();
+	}
+
+	static const std::string s = std::string(attributes_common()) + R"""(
 		let compute_position_offset = { (position) in
 			ND_subtract_vector3(position, position_attribute)
 		};
+
+		let compute_normal = { (normal) in normal };
+		let compute_bitangent = { (bitangent) in bitangent };
 	)""";
+	return s.c_str();
 }
 
 // These should eventually change behavior based on the render options:
@@ -310,6 +372,9 @@ inline const char *tangent() { return "tangent_attribute"; }
 inline const char *bitangent() { return "bitangent_attribute"; }
 
 inline const char *color() {
+	return "rgba_to_vec4f(ND_geomcolor_color4(0))";
+}
+inline const char *color_rgb() {
 	return "rgb_to_vec3f(ND_geomcolor_color3(0))";
 }
 inline const char *alpha() {
@@ -324,13 +389,19 @@ inline const char *uv1() {
 } //namespace vertex
 
 namespace fragment {
-inline const char *position() { return position::world(); }
-inline const char *normal() { return normal::world(); }
-inline const char *tangent() { return tangent::world(); }
-inline const char *bitangent() { return bitangent::world(); }
+inline const char *position() { return position::view(); }
+inline const char *normal() { return normal::view(); }
+inline const char *tangent() { return tangent::view(); }
+inline const char *bitangent() { return bitangent::view(); }
 
 inline const char *color() {
 	return "rgba_to_vec4f(ND_geomcolor_color4(0))";
+}
+inline const char *color_rgb() {
+	return "rgba_to_vec3f(ND_geomcolor_color4(0))";
+}
+inline const char *alpha() {
+	return "v4_w(rgba_to_vec4f(ND_geomcolor_color4(0)))";
 }
 inline const char *uv0() {
 	return "ND_geompropvalue_vector2(\"UV0\", (0.0f, 0.0f))";
@@ -339,7 +410,7 @@ inline const char *uv1() {
 	return "ND_geompropvalue_vector2(\"UV1\", (0.0f, 0.0f))";
 }
 inline const char *view_vector() {
-	return "ND_realitykit_viewdirection_vector3(\"world\")";
+	return R"""(ND_normalize_vector3(v4_xyz(ND_multiply_matrix44_vector4(ND_realitykit_surface_world_to_view(), ND_combine4_vector4(v3_x(ND_realitykit_viewdirection_vector3("world")), v3_y(ND_realitykit_viewdirection_vector3("world")), v3_z(ND_realitykit_viewdirection_vector3("world")), 0.0f)))))""";
 }
 } //namespace fragment
 

@@ -38,14 +38,14 @@ public:
 
 	bool update();
 
-	swift::Optional<GodotRealityKit::LowLevelInstanceData> find_resource(godot::RID p_multimesh_rid) const {
+	GodotRealityKit::LowLevelInstanceData find_resource(godot::RID p_multimesh_rid) const {
 		if (!p_multimesh_rid.is_valid()) {
-			return swift::Optional<GodotRealityKit::LowLevelInstanceData>::none();
+			return GodotRealityKit::LowLevelInstanceData::init();
 		}
 
-		ERR_FAIL_COND_V(!multimesh_rid_to_idx.has(p_multimesh_rid), swift::Optional<GodotRealityKit::LowLevelInstanceData>::none());
+		ERR_FAIL_COND_V(!multimesh_rid_to_idx.has(p_multimesh_rid), GodotRealityKit::LowLevelInstanceData::init());
 		const uint32_t idx = multimesh_rid_to_idx.get(p_multimesh_rid);
-		return swift::Optional<GodotRealityKit::LowLevelInstanceData>::some(multimeshes[idx].instance_data);
+		return multimeshes[idx].instance_data;
 	}
 
 private:

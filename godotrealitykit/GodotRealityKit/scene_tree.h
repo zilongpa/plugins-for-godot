@@ -20,6 +20,7 @@
 #undef check
 #include <godot_cpp/classes/input_event_from_window.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
+#include <godot_cpp/classes/xr_interface.hpp>
 
 #include <godot_cpp/templates/local_vector.hpp>
 
@@ -37,6 +38,7 @@ class TextureLoader;
 class ShapeLoader;
 class EnvironmentLoader;
 class SkyboxLoader;
+class SkeletonLoader;
 
 using ResourceLoaderSet = std::tuple<
 		MeshLoader *,
@@ -45,7 +47,8 @@ using ResourceLoaderSet = std::tuple<
 		TextureLoader *,
 		ShapeLoader *,
 		EnvironmentLoader *,
-		SkyboxLoader *>;
+		SkyboxLoader *,
+		SkeletonLoader *>;
 
 struct ColliderInputEventParams {
 	uint64_t collider_id;
@@ -73,6 +76,7 @@ public:
 	godot::Node *get_root_node() { return root_node; }
 
 	NodeLoaders *get_nodes() { return nodes; }
+	ResourceLoaderSet &get_resource_loaders() { return resource_loaders; }
 	MaterialLoader *get_materials();
 
 	godot::Vector3 get_viewport_size() const { return viewport_size; }
@@ -90,6 +94,7 @@ public:
 
 private:
 	void dump_metal_capture(id<MTLCommandQueue> p_command_queue);
+	void reset_dirty_resources();
 
 	friend class ::GDRKBridgeDelegate;
 
@@ -116,7 +121,6 @@ private:
 
 	std::optional<std::function<void()>> on_next_frame_completion;
 	bool loading_in_progress = false;
-	bool original_scene_destroyed = false;
 };
 
 // This class overrides the Godot main loop.
@@ -148,6 +152,10 @@ private:
 	GodotRealityKit::Bridge bridge = GodotRealityKit::Bridge::init();
 	SceneLoader *loader = nullptr;
 	GDRKBridgeDelegate::ExtensionSettings extension_settings;
+#if TARGET_OS_XR
+	// The accessory-backed controller interface, when this scene tree registered one.
+	godot::Ref<godot::XRInterface> controller_interface;
+#endif
 	bool enabled = true;
 	bool paused_for_blocking_task = false;
 };

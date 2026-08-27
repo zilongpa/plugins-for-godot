@@ -43,8 +43,11 @@ bool ShapeLoader::update() {
 	PROFILE_FUNC_SCOPE;
 
 	return for_each_dirty_throttled([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return LocalBitVector::IterationResult::SKIPPED;
+		}
 		const godot::Shape3D *shape = shapes[idx].shape.ptr();
-		ERR_FAIL_NULL(shape);
+		ERR_FAIL_NULL_V(shape, LocalBitVector::IterationResult::SKIPPED);
 
 		if (const godot::BoxShape3D *box_shape = godot::Object::cast_to<godot::BoxShape3D>(shape)) {
 			// TODO: confirm shape xyz ordering
@@ -86,5 +89,6 @@ bool ShapeLoader::update() {
 		} else {
 			WARN_COMPAT_MSG("Can only load BoxShape3D, CapsuleShape3D, ConvexPolygonShape3D, ConcavePolygon3D, and SphereShape3D shapes for gesture interactions and hover effects")
 		}
+		return LocalBitVector::IterationResult::PROCESSED;
 	});
 }

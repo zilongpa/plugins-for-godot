@@ -325,6 +325,15 @@ public:
 		return dynamic_entries.has(id);
 	}
 
+	inline std::optional<godot::AABB> get_entry_aabb(uint32_t p_node_index, uint32_t p_subnode_index) const {
+		uint64_t entry_id = get_id(p_node_index, p_subnode_index);
+		const CullingEntry *const *found = entries.getptr(entry_id);
+		if (!found) {
+			return std::nullopt;
+		}
+		return (*found)->aabb;
+	}
+
 	template <std::invocable<const CullingEntry &> Fn>
 	inline void for_each_entry(const Fn &p_fn) const {
 		for (const auto &kv : entries) {

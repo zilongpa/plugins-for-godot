@@ -25,7 +25,7 @@ void MultiMeshInstanceLoader::update_deps(
 
 	Base::update_deps(p_resource_loaders);
 
-	ChangedMeshDependencyListSet changed_mesh_deps = ChangedMeshDependencyListSet(get_capacity());
+	ChangedDependencyListSet changed_mesh_deps = ChangedDependencyListSet(get_capacity());
 	ChangedDependencyListSet changed_multimesh_deps = ChangedDependencyListSet(get_capacity());
 	ChangedDependencyListSet changed_material_deps = ChangedDependencyListSet(get_capacity());
 
@@ -34,9 +34,14 @@ void MultiMeshInstanceLoader::update_deps(
 		changed_multimesh_deps.mark_changed(idx);
 		changed_material_deps.mark_changed(idx);
 	});
+
 	for_each_valid([&](uint32_t idx) {
 		godot::MultiMeshInstance3D *node = nodes[idx];
-		godot::Ref<godot::Mesh> mesh = node->get_multimesh()->get_mesh();
+		godot::Ref<godot::MultiMesh> multimesh = node->get_multimesh();
+		if (!multimesh.is_valid()) {
+			return;
+		}
+		godot::Ref<godot::Mesh> mesh = multimesh->get_mesh();
 
 		add_dirty_multimesh_deps(changed_mesh_deps,
 				changed_multimesh_deps,
@@ -55,14 +60,34 @@ void MultiMeshInstanceLoader::update_deps(
 	material_deps.replace_changed(changed_material_deps, materials);
 }
 
-void MultiMeshInstanceLoader::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
+void MultiMeshInstanceLoader::update_visibility_state(const MeshLoader *p_meshes) {
+	for_each_valid([&](uint32_t idx) {
+		if (!is_enabled(idx)) {
+			return;
+		}
+		godot::MultiMeshInstance3D *node = nodes[idx];
+		godot::Ref<godot::MultiMesh> multimesh = node->get_multimesh();
+		if (!multimesh.is_valid()) {
+			return;
+		}
 
-	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
-	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
-	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+		if (multimesh->get_visible_instance_count() == 0) {
+			unregister_entity(idx, node);
+			mark_invisible(idx);
+		} else {
+			if (!node_entities[idx].registered) {
+				mark_dirty(idx);
+				register_entity(idx);
+				mark_visible(idx);
+			}
+		}
+	});
+}
 
-	Base::update(p_resource_loaders);
+void MultiMeshInstanceLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	const MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	const MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	const MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
 
 	dirty_idxs.merge(mesh_deps.changed());
 	if (meshes->has_dirty()) {
@@ -90,8 +115,56 @@ void MultiMeshInstanceLoader::update(const ResourceLoaderSet &p_resource_loaders
 			}
 		}
 	}
+}
+
+void MultiMeshInstanceLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	for (Dependency dep : mesh_deps.get()) {
+		if (is_valid(dep.dst)) {
+			meshes->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : multimesh_deps.get()) {
+		if (is_valid(dep.dst)) {
+			multimeshes->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : material_deps.get()) {
+		if (is_valid(dep.dst)) {
+			materials->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+void MultiMeshInstanceLoader::_on_visibility_changed(uint32_t p_idx) {
+	Base::_on_visibility_changed(p_idx);
+	const bool now_enabled = node_entities[p_idx].enabled;
+
+	if (now_enabled) {
+		mark_dirty(p_idx);
+	} else {
+		if (is_registered(p_idx)) {
+			node_entities[p_idx].entity.clearChildren();
+		}
+	}
+}
+
+void MultiMeshInstanceLoader::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
 
 	for_each_dirty([&](uint32_t idx) {
+		if (!is_registered(idx)) {
+			return;
+		}
 		godot::MultiMeshInstance3D *node = nodes[idx];
 		ERR_FAIL_NULL(node);
 
@@ -99,8 +172,7 @@ void MultiMeshInstanceLoader::update(const ResourceLoaderSet &p_resource_loaders
 		godot::Ref<godot::Mesh> mesh = multimesh->get_mesh();
 
 		node_entities[idx].entity.clearChildren();
-		for (uint32_t surface_idx = 0; surface_idx < mesh_get_surface_count(node); surface_idx++) {
-			GodotRealityKit::Entity child = mesh_surface_to_entity(node, surface_idx, meshes, materials, multimeshes);
+		for (GodotRealityKit::Entity child : node_to_entities(node, meshes, materials, multimeshes)) {
 			node_entities[idx].entity.addChild(child);
 		}
 	});

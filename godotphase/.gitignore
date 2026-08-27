@@ -1,0 +1,32 @@
+# Godot auto generated files
+*.gen.*
+.import/
+.godot/
+/gen
+
+.DS_Store
+
+# for projects that use SCons for building: http://http://www.scons.org/
+.sconf_temp
+.sconsign.dblite
+*.pyc
+
+# build products
+*.a
+*.o
+*.os
+*.o.tmp
+/build
+/demo/bin/*
+!/demo/bin/godotphase.gdextension
+
+# iOS/macOS specific build artifacts
+*.dSYM
+*.xcarchive
+
+# Rider generated files
+.idea
+
+# Xcode debug project
+*.xcodeproj/xcuserdata
+*.xcodeproj/project.xcworkspace/xcuserdata

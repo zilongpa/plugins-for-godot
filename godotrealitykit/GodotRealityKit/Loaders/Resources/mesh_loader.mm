@@ -12,6 +12,7 @@
 #include "mesh_loader.h"
 #include "bridge.h"
 #include "signposts.h"
+#include "skeleton_loader.h"
 #include "utility.h"
 
 #include <godot_cpp/templates/sort_array.hpp>
@@ -89,8 +90,9 @@ static uint8_t get_vertex_buffer_flags(uint64_t format, bool compressed_uvs) {
 	return flags;
 }
 
-void MeshLoader::initialize() {
+void MeshLoader::initialize(SkeletonLoader *p_skeletons) {
 	mesh_encoder.initialize();
+	skeletons = p_skeletons;
 }
 
 uint32_t MeshLoader::find_or_add(godot::RID p_mesh_rid,
@@ -123,13 +125,11 @@ uint32_t MeshLoader::find_or_add(godot::RID p_mesh_rid,
 	}
 
 	uint64_t skeleton_id = 0;
+	uint32_t skeleton_idx = UINT32_MAX;
 	if (p_skeleton) {
 		skeleton_id = p_skeleton->get_instance_id();
-		godot::Callable pose_updated_callable =
-				callable_mp(this, &MeshLoader::skeleton_pose_updated).bind(skeleton_id);
-		if (!p_skeleton->is_connected("pose_updated", pose_updated_callable)) {
-			p_skeleton->connect("pose_updated", pose_updated_callable);
-		}
+		skeleton_idx = skeletons->find_or_add(skeleton_id, p_skeleton);
+		skeletons->reference(skeleton_idx);
 	}
 
 	meshes[idx] = Mesh{
@@ -139,8 +139,21 @@ uint32_t MeshLoader::find_or_add(godot::RID p_mesh_rid,
 
 	mesh_rid_idxs[idx] = mesh_rid_idx;
 	meshes[idx].skeleton_id = skeleton_id;
+	meshes[idx].skeleton_idx = skeleton_idx;
 	mesh_to_idx.insert(key, idx);
+	surface_info_dirty_idxs.insert(idx);
 
+	return idx;
+}
+
+uint32_t MeshLoader::get_mesh_index(godot::RID p_mesh_rid, uint64_t p_instance_id) const {
+	const MeshKey key = MeshKey{
+		.mesh_rid = p_mesh_rid,
+		.instance_id = p_instance_id,
+	};
+
+	ERR_FAIL_COND_V(!mesh_to_idx.has(key), UINT32_MAX);
+	const uint32_t idx = mesh_to_idx.get(key);
 	return idx;
 }
 
@@ -150,60 +163,22 @@ void MeshLoader::remove(uint32_t p_idx) {
 			.instance_id = meshes[p_idx].instance_id,
 	});
 
+	const uint32_t skeleton_idx = meshes[p_idx].skeleton_idx;
+	if (skeleton_idx != UINT32_MAX) {
+		skeletons->unreference(skeleton_idx);
+	}
+
 	meshes[p_idx] = Mesh();
 	mesh_rid_idxs[p_idx] = UINT32_MAX;
 	meshes[p_idx].skeleton_id = 0;
+	surface_info_dirty_idxs.remove(p_idx);
 	free_idx(p_idx);
-}
-
-void MeshLoader::add_instance(uint32_t p_idx, godot::RID p_instance_rid) {
-	meshes[p_idx].instance_rids.push_back(p_instance_rid);
-}
-
-void MeshLoader::remove_instance(uint32_t p_idx, godot::RID p_instance_rid) {
-	meshes[p_idx].instance_rids.erase(p_instance_rid);
-}
-
-void MeshLoader::add_skeleton_modifier(godot::SkeletonModifier3D *p_skeleton_modifier) {
-	godot::Skeleton3D *skeleton = p_skeleton_modifier->get_skeleton();
-	if (!skeleton) {
-		return;
-	}
-	const uint64_t skeleton_id = skeleton->get_instance_id();
-	godot::Callable pose_updated_callable =
-			callable_mp(this, &MeshLoader::skeleton_pose_updated).bind(skeleton_id);
-	if (!p_skeleton_modifier->is_connected("modification_processed", pose_updated_callable)) {
-		p_skeleton_modifier->connect("modification_processed", pose_updated_callable);
-	}
-}
-
-void MeshLoader::skeleton_pose_updated(uint64_t p_skeleton_id) {
-	dirty_skeleton_ids.insert(p_skeleton_id);
-
-	godot::Object *obj = godot::ObjectDB::get_instance(p_skeleton_id);
-	godot::Skeleton3D *skeleton = godot::Object::cast_to<godot::Skeleton3D>(obj);
-	if (!skeleton) {
-		return;
-	}
-	const int32_t bone_count = skeleton->get_bone_count();
-
-	// Snapshot bone poses now — before Skeleton3D restores pre-modifier state.
-	for (uint32_t idx = 0; idx < get_capacity(); idx++) {
-		if (!is_valid(idx) || meshes[idx].skeleton_id != p_skeleton_id) {
-			continue;
-		}
-		godot::LocalVector<godot::Transform3D> &snapshot = meshes[idx].bone_pose_snapshot;
-		snapshot.resize(bone_count);
-		for (int32_t i = 0; i < bone_count; i++) {
-			snapshot[i] = skeleton->get_bone_global_pose(i);
-		}
-	}
 }
 
 void MeshLoader::set_blend_shape_weights(uint32_t p_idx, Span<const float> p_weights) {
 	Mesh &mesh = meshes[p_idx];
 	mesh.blend_shape_weights = SmallLocalVector<float, 8>(p_weights);
-	mesh_dirty_position_idxs.insert(p_idx);
+	mesh_needs_reencoding.insert(p_idx);
 }
 
 void MeshLoader::set_skin(uint32_t p_idx, const godot::Ref<godot::Skin> &p_skin) {
@@ -212,44 +187,72 @@ void MeshLoader::set_skin(uint32_t p_idx, const godot::Ref<godot::Skin> &p_skin)
 		return;
 	}
 	mesh.skin = p_skin;
-	mesh_dirty_position_idxs.insert(p_idx);
+	mesh_needs_reencoding.insert(p_idx);
+}
+
+void MeshLoader::prepare_frame_changes() {
+	
+	for_each_valid([&](uint32_t idx) {
+		if (is_dirty(idx)) {
+			surface_info_dirty_idxs.insert(idx);
+			return;
+		}
+
+		const uint32_t mesh_rid_idx = mesh_rid_idxs[idx];
+		if (dirty_mesh_rid_idxs.has(mesh_rid_idx)) {
+			surface_info_dirty_idxs.insert(idx);
+		}
+	});
+
+	godot::RenderingServer *rs = rendering_server();
+	surface_info_dirty_idxs.for_each([&](uint32_t idx) {
+		dirty_idxs.insert(idx);
+		mark_changed_in_frame(idx);
+		Mesh &mesh = meshes[idx];
+
+		// Force reload of surfaces
+		mesh.surfaces.reset();
+
+		const uint32_t surface_count = rs->mesh_get_surface_count(mesh.mesh_rid);
+		mesh.surface_infos.reserve(surface_count);
+		mesh.surface_infos.reset();
+		for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+			godot::Dictionary surface_data = rs->mesh_get_surface(mesh.mesh_rid, surface_idx);
+			Mesh::SurfaceInfo surface_info = get_surface_info(surface_data, mesh.mesh_rid);
+			mesh.surface_infos.push_back(surface_info);
+		}
+		godot::AABB new_bounds = compute_local_aabb(VECTOR_SPAN(mesh.surface_infos));
+		const bool bounds_dirty = bounds_changed(new_bounds, mesh.instance_aabb, 0.1);
+		if (bounds_dirty) {
+			mesh.instance_aabb = new_bounds;
+			mesh_needs_bounds_update.insert(idx);
+		}
+	});
+
+	surface_info_dirty_idxs.clear();
 }
 
 bool MeshLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 	PROFILE_FUNC_SCOPE;
 
-	if (dirty_mesh_rid_idxs.count() > 0) {
-		for (uint32_t idx = 0; idx < get_capacity(); idx++) {
-			const uint32_t mesh_rid_idx = mesh_rid_idxs[idx];
-			if (is_valid(idx) && dirty_mesh_rid_idxs.has(mesh_rid_idx)) {
-				dirty_idxs.insert(idx);
-			}
-		}
-	}
-
-	mesh_encoder.start(p_command_buffer);
+	mesh_encoder.start(p_command_buffer, skeletons);
 
 	bool finished = for_each_dirty_throttled([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return LocalBitVector::IterationResult::SKIPPED;
+		}
 		const godot::RID mesh_rid = meshes[idx].mesh_rid;
 
 		godot::RenderingServer *rs = rendering_server();
-		const uint32_t surface_count = rs->mesh_get_surface_count(mesh_rid);
-		SmallLocalVector<godot::Dictionary, 8> surface_dicts;
-		SmallLocalVector<Mesh::SurfaceInfo, 8> surface_infos;
-		surface_dicts.reserve(surface_count);
-		surface_infos.reserve(surface_count);
-
-		for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
-			surface_dicts.push_back(rs->mesh_get_surface(mesh_rid, surface_idx));
-			surface_infos.push_back(get_surface_info(surface_dicts[surface_idx], mesh_rid));
-		}
+		const SmallLocalVector<Mesh::SurfaceInfo, 8> &surface_infos = meshes[idx].surface_infos;
+		const uint32_t surface_count = surface_infos.size();
 
 		meshes[idx].blend_shape_count = mesh_rid.is_valid() ? uint32_t(rs->mesh_get_blend_shape_count(mesh_rid)) : 0u;
 		meshes[idx].normalized_blend_shapes =
 				rs->mesh_get_blend_shape_mode(mesh_rid) == godot::RenderingServer::BLEND_SHAPE_MODE_NORMALIZED;
 
 		bool surfaces_need_new_resources = false;
-		if (meshes[idx].surface_infos.size() == surface_infos.size()) {
+		if (meshes[idx].surfaces.size() == surface_infos.size()) {
 			for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
 				if (surface_needs_new_resource(surface_infos[surface_idx], meshes[idx].surface_infos[surface_idx])) {
 					surfaces_need_new_resources = true;
@@ -260,42 +263,138 @@ bool MeshLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 			surfaces_need_new_resources = true;
 		}
 
+		// Compaction: pack compatible static surfaces into a single multi-part
+		// LowLevelMesh. Requires identical vertex format / uv_scale across surfaces,
+		// no compressed attributes (decompress kernel writes per-surface buffers),
+		// and no per-instance deformation (skeleton or blend shapes — those go
+		// through MeshEncoder's deform path which assumes one-buffer-per-surface).
+		auto can_compact = [&]() -> bool {
+			if (surface_count <= 1) {
+				return false;
+			}
+			if (no_compact_idxs.has(idx)) {
+				return false;
+			}
+			if (meshes[idx].skeleton_id != 0 || rs->mesh_get_blend_shape_count(mesh_rid) > 0) {
+				return false;
+			}
+			const uint8_t compressed_attrs_flag = GodotRealityKit::VertexBufferFlags::getHasCompressedAttributes().getRawValue();
+			if (surface_infos[0].vertex_buffer_flags & compressed_attrs_flag) {
+				return false;
+			}
+			const uint8_t ref_flags = surface_infos[0].vertex_buffer_flags;
+			const GDRKVertexBufferFormat &ref_fmt = surface_infos[0].vertex_buffer_format;
+			const godot::Vector4 ref_uv_scale = surface_infos[0].uv_scale;
+			for (uint32_t s = 1; s < surface_count; s++) {
+				if (surface_infos[s].vertex_buffer_flags != ref_flags ||
+						surface_infos[s].vertex_buffer_format.vertex_stride != ref_fmt.vertex_stride ||
+						surface_infos[s].vertex_buffer_format.normal_tangent_stride != ref_fmt.normal_tangent_stride ||
+						surface_infos[s].vertex_buffer_format.attribute_stride != ref_fmt.attribute_stride ||
+						surface_infos[s].uv_scale != ref_uv_scale) {
+					return false;
+				}
+			}
+			return true;
+		}();
+
 		if (surfaces_need_new_resources) {
 			meshes[idx].surfaces.reset();
-			meshes[idx].surfaces.reserve(surface_count);
+			emplace_replace(&meshes[idx].compacted_resource, GodotRealityKit::MeshResource::init());
 
-			for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
-				const Mesh::SurfaceInfo &info = surface_infos[surface_idx];
-				const bool is_index_16 = info.vertex_count <= 65536 && info.vertex_count > 0;
-				const bool is_compressed = surface_has_compressed_attributes(info.vertex_buffer_flags);
-				const GDRKVertexBufferFormat llm_format = is_compressed
-						? info.decompressed_vertex_buffer_format
-						: info.vertex_buffer_format;
-				const uint8_t llm_flags = is_compressed
-						? compute_decompressed_flags(info.vertex_buffer_flags)
-						: info.vertex_buffer_flags;
+			if (can_compact) {
+				uint32_t total_vertex_count = 0;
+				uint32_t total_index_count = 0;
+				godot::AABB merged_bounds;
+				for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+					total_vertex_count += surface_infos[surface_idx].vertex_count;
+					total_index_count += surface_infos[surface_idx].index_count;
+					if (merged_bounds.has_volume()) {
+						merged_bounds.merge_with(surface_infos[surface_idx].bounds);
+					} else {
+						merged_bounds = surface_infos[surface_idx].bounds;
+					}
+				}
+
+				const uint32_t vertex_stride = surface_infos[0].vertex_buffer_format.vertex_stride;
+
+				// In a non-compacted single-surface mesh, normals/tangents start at
+				// `normal_offset` within each surface's buffer. In a compacted mesh,
+				// all surfaces' positions come first (each surface's positions packed
+				// at vertex_stride), then all surfaces' normal/tangent data — so the
+				// shared normal_offset moves to total_vertex_count * vertex_stride.
+				GDRKVertexBufferFormat compacted_format = surface_infos[0].vertex_buffer_format;
+				const uint32_t relative_tangent_offset = compacted_format.tangent_offset - compacted_format.normal_offset;
+				compacted_format.normal_offset = total_vertex_count * vertex_stride;
+				compacted_format.tangent_offset = compacted_format.normal_offset + relative_tangent_offset;
+
 				swift::Optional<GodotRealityKit::LowLevelMesh> low_level_mesh =
-						GodotRealityKit::LowLevelMesh::init(info.vertex_count,
-								info.index_count,
-								GodotRealityKit::VertexBufferFlags::init(llm_flags),
-								llm_format,
-								is_index_16,
-								1);
+						GodotRealityKit::LowLevelMesh::init(total_vertex_count,
+								total_index_count,
+								GodotRealityKit::VertexBufferFlags::init(surface_infos[0].vertex_buffer_flags),
+								compacted_format,
+								false,
+								surface_count);
 
-				ERR_FAIL_COND_MSG(low_level_mesh.isNone(), "Failed to create low level mesh");
+				ERR_FAIL_COND_V_MSG(low_level_mesh.isNone(), LocalBitVector::IterationResult::SKIPPED, "Failed to create compacted low level mesh");
 
-				low_level_mesh.get().setIndexCount(info.index_count);
+				swift::Array<swift::Int> index_counts = swift::Array<swift::Int>::init();
+				for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+					index_counts.append(surface_infos[surface_idx].index_count);
+				}
+				low_level_mesh.get().setIndexCounts(index_counts, false);
 
-				swift::Optional<GodotRealityKit::MeshResource> mesh_resource =
-						GodotRealityKit::MeshResource::init(low_level_mesh.get(), to_vector3(info.bounds.position),
-								to_vector3(info.bounds.position + info.bounds.size), to_vector4(info.uv_scale));
-				ERR_FAIL_COND(mesh_resource.isNone());
+				swift::Optional<GodotRealityKit::MeshResource> compacted_opt =
+						GodotRealityKit::MeshResource::init(low_level_mesh.get(),
+								to_vector3(merged_bounds.position),
+								to_vector3(merged_bounds.position + merged_bounds.size),
+								to_vector4(surface_infos[0].uv_scale));
+				ERR_FAIL_COND_V(compacted_opt.isNone(), LocalBitVector::IterationResult::SKIPPED);
+				emplace_replace(&meshes[idx].compacted_resource, compacted_opt.get());
 
-				meshes[idx].surfaces.push_back(Mesh::Surface{ .resource = mesh_resource.get() });
+				// Per-surface Surface entries are still needed so the encoder can
+				// stash surface_data + encoding_mode per surface. Their `resource`
+				// field is left default-initialized — the compacted path only ever
+				// writes through `compacted_resource`.
+				meshes[idx].surfaces.reserve(surface_count);
+				for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+					meshes[idx].surfaces.push_back(Mesh::Surface{});
+				}
+			} else {
+				meshes[idx].surfaces.reserve(surface_count);
+
+				for (uint32_t surface_idx = 0; surface_idx < surface_count; surface_idx++) {
+					const Mesh::SurfaceInfo &info = surface_infos[surface_idx];
+					const bool is_index_16 = info.vertex_count <= 65536 && info.vertex_count > 0;
+					const bool is_compressed = surface_has_compressed_attributes(info.vertex_buffer_flags);
+					const GDRKVertexBufferFormat llm_format = is_compressed
+							? info.decompressed_vertex_buffer_format
+							: info.vertex_buffer_format;
+					const uint8_t llm_flags = is_compressed
+							? compute_decompressed_flags(info.vertex_buffer_flags)
+							: info.vertex_buffer_flags;
+					swift::Optional<GodotRealityKit::LowLevelMesh> low_level_mesh =
+							GodotRealityKit::LowLevelMesh::init(info.vertex_count,
+									info.index_count,
+									GodotRealityKit::VertexBufferFlags::init(llm_flags),
+									llm_format,
+									is_index_16,
+									1);
+
+					ERR_FAIL_COND_V_MSG(low_level_mesh.isNone(), LocalBitVector::IterationResult::SKIPPED, "Failed to create low level mesh");
+
+					low_level_mesh.get().setIndexCount(info.index_count);
+
+					swift::Optional<GodotRealityKit::MeshResource> mesh_resource =
+							GodotRealityKit::MeshResource::init(low_level_mesh.get(), to_vector3(info.bounds.position),
+									to_vector3(info.bounds.position + info.bounds.size), to_vector4(info.uv_scale));
+					ERR_FAIL_COND_V(mesh_resource.isNone(), LocalBitVector::IterationResult::SKIPPED);
+
+					meshes[idx].surfaces.push_back(Mesh::Surface{ .resource = mesh_resource.get() });
+				}
 			}
-			meshes[idx].instance_aabb = godot::AABB();
+			mesh_needs_bounds_update.insert(idx);
 		} else {
-			mesh_dirty_position_idxs.remove(idx);
+			mesh_needs_reencoding.remove(idx);
 		}
 
 		// Store raw surface data and set encoding mode — encoder handles the rest.
@@ -304,17 +403,19 @@ bool MeshLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 			Mesh::Surface &surface = meshes[idx].surfaces[surface_idx];
 			const bool is_compressed = surface_has_compressed_attributes(info.vertex_buffer_flags);
 
-			surface.surface_data = surface_dicts[surface_idx];
+			surface.surface_data = info.data;
 			surface.base_vertex_mtl = nil;
 			surface.skin_mtl = nil;
 			surface.blend_shape_mtl = nil;
 
-			surface.resource.setBounds(to_vector3(info.bounds.position), to_vector3(info.bounds.position + info.bounds.size));
-			surface.resource.setUVScale(to_vector4(info.uv_scale));
+			if (!meshes[idx].compacted_resource.isSome()) {
+				surface.resource.setBounds(to_vector3(info.bounds.position), to_vector3(info.bounds.position + info.bounds.size));
+				surface.resource.setUVScale(to_vector4(info.uv_scale));
 
-			swift::Optional<GodotRealityKit::LowLevelMesh> low_level_mesh = surface.resource.lowLevelMesh();
-			ERR_CONTINUE(low_level_mesh.isNone());
-			low_level_mesh.get().setIndexCount(info.index_count);
+				swift::Optional<GodotRealityKit::LowLevelMesh> low_level_mesh = surface.resource.lowLevelMesh();
+				ERR_CONTINUE(low_level_mesh.isNone());
+				low_level_mesh.get().setIndexCount(info.index_count);
+			}
 
 			static godot::StringName skin_data_str("skin_data");
 			static godot::StringName blend_shape_data_str("blend_shape_data");
@@ -330,47 +431,52 @@ bool MeshLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 					(has_attributes ? MeshEncoder::ENCODING_MODE_FLAG_WITH_UV : 0));
 		}
 
-		meshes[idx].surface_infos = std::move(surface_infos);
 		mesh_encoder.prepare(meshes[idx]);
-		mesh_dirty_position_idxs.insert(idx);
+		mesh_encoder.encode_attributes(meshes[idx]);
+		mesh_needs_reencoding.insert(idx);
+		return LocalBitVector::IterationResult::PROCESSED;
 	});
 
-	if (dirty_skeleton_ids.size() > 0) {
+	if (skeletons->has_dirty()) {
 		for (uint32_t idx = 0; idx < get_capacity(); idx++) {
-			const uint64_t skeleton_id = meshes[idx].skeleton_id;
-			if (is_valid(idx) && dirty_skeleton_ids.has(skeleton_id)) {
-				mesh_dirty_position_idxs.insert(idx);
+			if (is_valid(idx) && skeletons->is_dirty(meshes[idx].skeleton_idx)) {
+				mesh_needs_reencoding.insert(idx);
 			}
 		}
 	}
 
-	mesh_dirty_position_idxs.for_each([&](uint32_t idx) {
+	mesh_needs_reencoding.for_each([&](uint32_t idx) {
 		if (idx >= next_dirty_idx) {
 			return;
 		}
 
-		mesh_dirty_position_idxs.remove(idx);
-
-		ERR_FAIL_COND(meshes[idx].instance_rids.is_empty());
-		if (meshes[idx].surfaces.is_empty()) {
+		if (!is_used_in_frame(idx)) {
 			return;
 		}
 
-		Mesh &mesh = meshes[idx];
+		mesh_needs_reencoding.remove(idx);
+		mesh_encoder.encode_positions(meshes[idx]);
+	});
+	mesh_encoder.commit();
 
-		// Compute mesh-local AABB from per-surface bounds.
-		godot::AABB instance_aabb;
-		const uint32_t surface_count = mesh.surface_infos.size();
-		if (surface_count > 0) {
-			instance_aabb = mesh.surface_infos[0].bounds;
-			for (uint32_t surface_idx = 1; surface_idx < surface_count; surface_idx++) {
-				instance_aabb.merge_with(mesh.surface_infos[surface_idx].bounds);
-			}
+	mesh_needs_bounds_update.for_each([&](uint32_t idx) {
+		if (idx >= next_dirty_idx) {
+			return;
+		}
+		if (!is_used_in_frame(idx)) {
+			return;
 		}
 
-		const bool bounds_dirty = bounds_changed(mesh.instance_aabb, instance_aabb, 0.1);
-		if (bounds_dirty) {
-			mesh.instance_aabb = instance_aabb;
+		mesh_needs_bounds_update.remove(idx);
+		Mesh &mesh = meshes[idx];
+		const godot::AABB &instance_aabb = mesh.instance_aabb;
+		if (mesh.compacted_resource.isSome()) {
+			swift::Optional<GodotRealityKit::LowLevelMesh> llm = mesh.compacted_resource.lowLevelMesh();
+			if (llm.isSome()) {
+				llm.get().setBounds(to_vector3(instance_aabb.position), to_vector3(instance_aabb.position + instance_aabb.size));
+			}
+			mesh.compacted_resource.setBounds(to_vector3(instance_aabb.position), to_vector3(instance_aabb.position + instance_aabb.size));
+		} else {
 			for (Mesh::Surface &surface : mesh.surfaces) {
 				swift::Optional<GodotRealityKit::LowLevelMesh> llm = surface.resource.lowLevelMesh();
 				if (llm.isSome()) {
@@ -378,27 +484,55 @@ bool MeshLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 				}
 			}
 		}
-
-		mesh_encoder.encode(mesh);
 	});
 
-	mesh_encoder.commit();
-
 	dirty_mesh_rid_idxs.clear();
-	dirty_skeleton_ids.clear();
 
 	return finished;
 }
 
-swift::Optional<GodotRealityKit::MeshResource> MeshLoader::find_resource(godot::RID p_mesh_rid,
+godot::AABB MeshLoader::get_aabb(godot::RID p_mesh_rid, uint64_t p_instance_id) const {
+	const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id);
+	if (!mesh) {
+		return godot::AABB();
+	}
+	return mesh->instance_aabb;
+}
+
+GodotRealityKit::MeshResource MeshLoader::find_resource(godot::RID p_mesh_rid,
 		uint64_t p_instance_id,
 		uint32_t p_surface_idx) const {
-	const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id, p_surface_idx);
+	const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id);
 	if (!mesh) {
-		return swift::Optional<GodotRealityKit::MeshResource>::none();
+		return GodotRealityKit::MeshResource::init();
+	}
+	if (p_surface_idx >= mesh->surfaces.size()) {
+		return GodotRealityKit::MeshResource::init();
 	}
 
-	return swift::Optional<GodotRealityKit::MeshResource>::some(mesh->surfaces[p_surface_idx].resource);
+	return mesh->surfaces[p_surface_idx].resource;
+}
+
+godot::AABB MeshLoader::compute_local_aabb(Span<const Mesh::SurfaceInfo> p_surface_infos) const {
+	godot::AABB aabb;
+	for (uint32_t surface_idx = 0; surface_idx < p_surface_infos.size(); surface_idx++) {
+		if (surface_idx == 0) {
+			aabb = p_surface_infos[surface_idx].bounds;
+		} else {
+			aabb.merge_with(p_surface_infos[surface_idx].bounds);
+		}
+	}
+	return aabb;
+}
+
+GodotRealityKit::MeshResource MeshLoader::find_compacted_resource(godot::RID p_mesh_rid,
+		uint64_t p_instance_id) const {
+	const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id);
+	if (!mesh) {
+		return GodotRealityKit::MeshResource::init();
+	}
+
+	return mesh->compacted_resource;
 }
 
 Mesh::SurfaceInfo MeshLoader::get_surface_info(const godot::Dictionary &surface, godot::RID p_mesh_rid) const {
@@ -432,6 +566,7 @@ Mesh::SurfaceInfo MeshLoader::get_surface_info(const godot::Dictionary &surface,
 		.decompressed_vertex_buffer_format = decompressed,
 		.bounds = aabb,
 		.uv_scale = uv_scale,
+		.data = surface,
 	};
 }
 

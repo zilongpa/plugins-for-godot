@@ -32,7 +32,7 @@ class VisualShader;
 
 namespace gdrk {
 
-class ShaderMaterialDescription;
+struct ShaderMaterialDescription;
 
 struct VisualProgramMetadata {
 	static int version;
@@ -58,7 +58,7 @@ struct VisualProgramBuilderContext {
 	std::vector<std::string> errors;
 	std::vector<std::string> warnings;
 
-	bool requires_alpha_blending = false;
+	bool is_transparent = false;
 	bool uv_is_default = false;
 	bool uv2_is_default = false;
 	bool uv_used = false;
@@ -68,19 +68,21 @@ struct VisualProgramBuilderContext {
 
 	godot::HashMap<godot::StringName, UniformDescriptor> uniforms;
 	uint32_t warning_index = 0;
+
+	const ShaderMaterialDescription *material_description = nullptr;
 };
 
 class VisualProgramBuilder {
 public:
 	VisualProgramBuilder(swift::Optional<GodotRealityKit::Compiler> p_compiler,
-			const godot::Ref<godot::VisualShader> &p_shader);
+			const ShaderMaterialDescription &p_description);
 
 	static void finalize(ShaderMaterialDescription &p_desc, GodotRealityKit::SGLProgram &p_program);
 
 	bool build(swift::Array<GodotRealityKit::ProgramPart> &p_program_parts);
 	VisualProgramMetadata get_metadata() {
 		VisualProgramMetadata res;
-		res.is_transparent = context.requires_alpha_blending;
+		res.is_transparent = context.is_transparent;
 		res.uniforms.reserve(context.uniforms.size());
 		for (auto [_, descriptor] : context.uniforms) {
 			res.uniforms.push_back(descriptor);

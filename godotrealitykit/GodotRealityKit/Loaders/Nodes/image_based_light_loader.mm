@@ -75,12 +75,8 @@ void ImageBasedLightLoader::update_deps(
 	env_deps.replace_changed(changed_env_deps, environments);
 }
 
-void ImageBasedLightLoader::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
-
-	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
-
-	Base::update(p_resource_loaders);
+void ImageBasedLightLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	const EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
 
 	dirty_idxs.merge(env_deps.changed());
 	if (environments->has_dirty()) {
@@ -90,6 +86,24 @@ void ImageBasedLightLoader::update(const ResourceLoaderSet &p_resource_loaders) 
 			}
 		}
 	}
+}
+
+void ImageBasedLightLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
+
+	for (Dependency dep : env_deps.get()) {
+		if (is_valid(dep.dst)) {
+			environments->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+void ImageBasedLightLoader::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
 
 	for_each_dirty([&](uint32_t idx) {
 		RealityImageBasedLight3D *node = nodes[idx];
@@ -97,7 +111,7 @@ void ImageBasedLightLoader::update(const ResourceLoaderSet &p_resource_loaders) 
 
 		if (godot::Environment *env = *node->get_environment()) {
 			float exponent = EnvironmentLoader::get_energy_exponent(env);
-			swift::Optional<GodotRealityKit::EnvironmentResource> rkenv = environments->find_resource(env->get_rid());
+			GodotRealityKit::EnvironmentResource rkenv = environments->find_resource(env->get_rid());
 			node_entities[idx].entity.setImageBasedLight(rkenv, constants::ibl_intensity_exponent + exponent);
 		}
 

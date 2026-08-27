@@ -1,7 +1,7 @@
 ## Prerequisites
 
 - macOS with [Xcode](https://developer.apple.com/xcode/) installed (including the visionOS SDK)
-    - The visionOS 27 SDK is not yet supported; use the visionOS 26 SDK
+    - Use the visionOS 27 SDK
     - The Metal toolchain is required to build Godot. Install it with `xcodebuild -downloadComponent metalToolchain`.
 - [SCons](https://scons.org/) build system: `python3 -m pip install scons` or `brew install scons`
 - Python 3.x
@@ -11,14 +11,14 @@
 GodotRealityKit depends on custom forks of Godot and [godot-cpp](https://github.com/godotengine/godot-cpp). Their URLs and branches are configured in `deps.conf`:
 
 ```ini
-# Option 1: Use an existing shared workspace with pre-built deps (default)
-SHARED_WORKSPACE=../../shared_workspace
-
-# Option 2: Specify repository URLs to clone and build from source
+# Option 1: Specify repository URLs to clone and build from source (default)
 GODOT_URL=<godot git repository URL>
 GODOT_BRANCH=<godot commit or branch>
 GODOT_CPP_URL=<godot-cpp git repository URL>
 GODOT_CPP_BRANCH=<godot-cpp commit or branch>
+
+# Option 2: Use an existing shared workspace with pre-built deps
+SHARED_WORKSPACE=../../shared_workspace
 ```
 
 Running `scons` with no arguments builds everything: builds dependencies (if not already present), builds the macOS editor framework and visionOS template framework, assembles the addon, and generates documentation.

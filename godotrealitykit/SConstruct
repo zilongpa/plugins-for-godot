@@ -130,14 +130,12 @@ def build_godot(target_env):
 
     clone_or_fetch(GODOT_URL, GODOT_BRANCH, gdir)
 
-    lto = 'lto=full' if deps_config == 'release' else ''
-
     scons_cmds = [
         'scons verbose=1 platform=macos target=editor generate_bundle=yes dev_build=yes vulkan=false disable_path_overrides=no',
-        'scons verbose=1 platform=macos target=template_{config} generate_bundle=yes vulkan=false disable_path_overrides=no {lto}'.format(
-            config=deps_config, lto=lto),
-        'scons verbose=1 platform=visionos target=template_{config} generate_bundle=yes compiledb=yes vulkan=false {lto}'.format(
-            config=deps_config, lto=lto),
+        'scons verbose=1 platform=macos target=template_{config} generate_bundle=yes vulkan=false disable_path_overrides=no'.format(
+            config=deps_config),
+        'scons verbose=1 platform=visionos target=template_{config} generate_bundle=yes compiledb=yes vulkan=false SWIFT_FRONTEND="{REPO_DIR}/scripts/build/swift-frontend-wrapper.sh"'.format(
+            config=deps_config, REPO_DIR=REPO_DIR),
     ]
 
     for cmd in scons_cmds:
@@ -159,15 +157,13 @@ def build_godot_cpp(target_env):
     ext_api = os.path.join(dd, 'extension_api.json')
     tools_dir = os.path.join(REPO_DIR, 'tools')
 
-    lto = 'lto=full' if deps_config == 'release' else ''
-
     scons_cmds = [
-        'scons platform=macos target=editor custom_api_file={api} use_hot_reload=no {lto}'.format(
-            api=ext_api, lto=lto),
-        'scons platform=macos target=template_{config} custom_api_file={api} use_hot_reload=no {lto}'.format(
-            config=deps_config, api=ext_api, lto=lto),
-        'scons platform=visionos target=template_{config} custom_api_file={api} custom_tools={tools} use_hot_reload=no {lto}'.format(
-            config=deps_config, api=ext_api, tools=tools_dir, lto=lto),
+        'scons platform=macos target=editor custom_api_file={api} use_hot_reload=no'.format(
+            api=ext_api),
+        'scons platform=macos target=template_{config} custom_api_file={api} use_hot_reload=no'.format(
+            config=deps_config, api=ext_api),
+        'scons platform=visionos target=template_{config} custom_api_file={api} custom_tools={tools} use_hot_reload=no'.format(
+            config=deps_config, api=ext_api, tools=tools_dir),
     ]
 
     for cmd in scons_cmds:
@@ -321,7 +317,7 @@ def assemble_full_addon(cfg):
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(ad, f))
 
-    for d in ['volume_camera_gizmo', 'directional_light_shadow_gizmo']:
+    for d in ['volume_camera_gizmo', 'directional_light_shadow_gizmo', 'clipping_gizmo']:
         src = os.path.join(etc_dir, d)
         if os.path.isdir(src):
             shutil.copytree(src, os.path.join(ad, d))

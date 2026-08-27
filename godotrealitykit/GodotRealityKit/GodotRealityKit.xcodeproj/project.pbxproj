@@ -14,7 +14,7 @@
 		B8873A342E6F3AB600B35C1D /* utility.h in Headers */ = {isa = PBXBuildFile; fileRef = B8873A332E6F3AB600B35C1D /* utility.h */; };
 		B893B8452E8ECE2E0015F365 /* config.h in Headers */ = {isa = PBXBuildFile; fileRef = B893B8442E8ECE2C0015F365 /* config.h */; };
 		B893BA212E8F73C70015F365 /* utility.mm in Sources */ = {isa = PBXBuildFile; fileRef = B893BA202E8F73C30015F365 /* utility.mm */; };
-		B8A3A13F2E8B2BF6008C24BA /* GodotRealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EEC9EA7B2DDAE928002934A2 /* GodotRealityKit.framework */; };
+		B8FF1796172800000017961A /* gdt_renderer_relaunch_guard.mm in Sources */ = {isa = PBXBuildFile; fileRef = B8FF1796172800000017961B /* gdt_renderer_relaunch_guard.mm */; };
 		B8D05ACA2EE0A2D2001FD77C /* types.h in Headers */ = {isa = PBXBuildFile; fileRef = B8D05AC92EE0A2D2001FD77C /* types.h */; };
 		EE0B780E2E7497D80041559B /* scene_tree.mm in Sources */ = {isa = PBXBuildFile; fileRef = EE0B780D2E7497D40041559B /* scene_tree.mm */; };
 		EE5ABED92E45D889003CD7D3 /* RealityKitUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5ABED82E45D889003CD7D3 /* RealityKitUtils.swift */; };
@@ -24,16 +24,6 @@
 		EEC9EBB72DDCCF92002934A2 /* GodotRealityKit.h in Headers */ = {isa = PBXBuildFile; fileRef = EEC9EBB62DDCCF92002934A2 /* GodotRealityKit.h */; settings = {ATTRIBUTES = (Public, ); }; };
 /* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		B8A3A1402E8B2BF6008C24BA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = EEC9EA722DDAE928002934A2 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = EEC9EA7A2DDAE928002934A2;
-			remoteInfo = GodotRealityKit;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXFileReference section */
 		668BF7322F3D700200190172 /* constants.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = constants.h; sourceTree = "<group>"; };
 		66AA94CC2E90594400D9610D /* HelpCommands.txt */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HelpCommands.txt; sourceTree = "<group>"; };
@@ -42,9 +32,8 @@
 		B8873A332E6F3AB600B35C1D /* utility.h */ = {isa = PBXFileReference; explicitFileType = sourcecode.cpp.h; path = utility.h; sourceTree = "<group>"; };
 		B893B8442E8ECE2C0015F365 /* config.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = config.h; sourceTree = "<group>"; };
 		B893BA202E8F73C30015F365 /* utility.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = utility.mm; sourceTree = "<group>"; };
-		B8A3A13B2E8B2BF6008C24BA /* GodotRealityKitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GodotRealityKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B8FF1796172800000017961B /* gdt_renderer_relaunch_guard.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = gdt_renderer_relaunch_guard.mm; sourceTree = "<group>"; };
 		B8A3A14C2E8B364D008C24BA /* godot.macos.template_debug.arm64 */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = godot.macos.template_debug.arm64; path = ../out/shared_workspace/deps/debug/godot/bin/godot.macos.template_debug.arm64; sourceTree = "<group>"; };
-		B8A3A16B2E8C737B008C24BA /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 		B8D05AC92EE0A2D2001FD77C /* types.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = types.h; sourceTree = "<group>"; };
 		EE0B780D2E7497D40041559B /* scene_tree.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = scene_tree.mm; sourceTree = "<group>"; };
 		EE5ABED82E45D889003CD7D3 /* RealityKitUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityKitUtils.swift; sourceTree = "<group>"; };
@@ -64,7 +53,6 @@
 				NodeDefs/apple_bitwise_operations.mtlx,
 				NodeDefs/apple_comparison_node_extensions.mtlx,
 				NodeDefs/apple_defs_cameraindex.mtlx,
-				NodeDefs/apple_defs_test.mtlx,
 				NodeDefs/apple_defs.mtlx,
 				NodeDefs/apple_image_implementations.mtlx,
 				NodeDefs/apple_image_info_nodedefs.mtlx,
@@ -125,14 +113,6 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		B8A3A1382E8B2BF6008C24BA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				B8A3A13F2E8B2BF6008C24BA /* GodotRealityKit.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		EEC9EA782DDAE928002934A2 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -163,6 +143,7 @@
 				B8D05AC92EE0A2D2001FD77C /* types.h */,
 				EEC9EBB62DDCCF92002934A2 /* GodotRealityKit.h */,
 				EEC9EBB42DDCCEA0002934A2 /* extension.mm */,
+				B8FF1796172800000017961B /* gdt_renderer_relaunch_guard.mm */,
 				EE0B780D2E7497D40041559B /* scene_tree.mm */,
 				EE5AD31F2E7104DB001C1DBB /* scene_tree.h */,
 				EEC9EA882DDAE9B6002934A2 /* RealityKitBridge.swift */,
@@ -176,7 +157,6 @@
 			isa = PBXGroup;
 			children = (
 				EEC9EA7B2DDAE928002934A2 /* GodotRealityKit.framework */,
-				B8A3A13B2E8B2BF6008C24BA /* GodotRealityKitTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -184,7 +164,6 @@
 		EEC9EA8A2DDAEB2F002934A2 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				B8A3A16B2E8C737B008C24BA /* XCTest.framework */,
 				B8A3A14C2E8B364D008C24BA /* godot.macos.template_debug.arm64 */,
 				EEC9EBBC2DDCDBDA002934A2 /* AppKit.framework */,
 				EEC9EBBA2DDCDBD4002934A2 /* Foundation.framework */,
@@ -214,26 +193,6 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
-		B8A3A13A2E8B2BF6008C24BA /* GodotRealityKitTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = B8A3A1422E8B2BF6008C24BA /* Build configuration list for PBXNativeTarget "GodotRealityKitTests" */;
-			buildPhases = (
-				B8A3A1372E8B2BF6008C24BA /* Sources */,
-				B8A3A1382E8B2BF6008C24BA /* Frameworks */,
-				B8A3A1392E8B2BF6008C24BA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				B8A3A1412E8B2BF6008C24BA /* PBXTargetDependency */,
-			);
-			name = GodotRealityKitTests;
-			packageProductDependencies = (
-			);
-			productName = GodotRealityKitTests;
-			productReference = B8A3A13B2E8B2BF6008C24BA /* GodotRealityKitTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		EEC9EA7A2DDAE928002934A2 /* GodotRealityKit */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = EEC9EA812DDAE928002934A2 /* Build configuration list for PBXNativeTarget "GodotRealityKit" */;
@@ -274,10 +233,6 @@
 				LastSwiftUpdateCheck = 2600;
 				LastUpgradeCheck = 1700;
 				TargetAttributes = {
-					B8A3A13A2E8B2BF6008C24BA = {
-						CreatedOnToolsVersion = 26.0;
-						LastSwiftMigration = 2600;
-					};
 					EEC9EA7A2DDAE928002934A2 = {
 						CreatedOnToolsVersion = 17.0;
 						LastSwiftMigration = 1700;
@@ -299,19 +254,11 @@
 			projectRoot = "";
 			targets = (
 				EEC9EA7A2DDAE928002934A2 /* GodotRealityKit */,
-				B8A3A13A2E8B2BF6008C24BA /* GodotRealityKitTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		B8A3A1392E8B2BF6008C24BA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		EEC9EA792DDAE928002934A2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -363,18 +310,12 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		B8A3A1372E8B2BF6008C24BA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		EEC9EA772DDAE928002934A2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				EEC9EBB52DDCCEA0002934A2 /* extension.mm in Sources */,
+				B8FF1796172800000017961A /* gdt_renderer_relaunch_guard.mm in Sources */,
 				EE5ABED92E45D889003CD7D3 /* RealityKitUtils.swift in Sources */,
 				EE0B780E2E7497D80041559B /* scene_tree.mm in Sources */,
 				EEC9EA892DDAE9B6002934A2 /* RealityKitBridge.swift in Sources */,
@@ -384,31 +325,7 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
-/* Begin PBXTargetDependency section */
-		B8A3A1412E8B2BF6008C24BA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = EEC9EA7A2DDAE928002934A2 /* GodotRealityKit */;
-			targetProxy = B8A3A1402E8B2BF6008C24BA /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
 /* Begin XCBuildConfiguration section */
-		B8A3A1432E8B2BF6008C24BA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReferenceAnchor = B893BA272E8F99020015F365 /* Configurations */;
-			baseConfigurationReferenceRelativePath = Tests.xcconfig;
-			buildSettings = {
-			};
-			name = Debug;
-		};
-		B8A3A1442E8B2BF6008C24BA /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReferenceAnchor = B893BA272E8F99020015F365 /* Configurations */;
-			baseConfigurationReferenceRelativePath = Tests.xcconfig;
-			buildSettings = {
-			};
-			name = Release;
-		};
 		EEC9EA822DDAE928002934A2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReferenceAnchor = B893BA272E8F99020015F365 /* Configurations */;
@@ -444,15 +361,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		B8A3A1422E8B2BF6008C24BA /* Build configuration list for PBXNativeTarget "GodotRealityKitTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				B8A3A1432E8B2BF6008C24BA /* Debug */,
-				B8A3A1442E8B2BF6008C24BA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		EEC9EA752DDAE928002934A2 /* Build configuration list for PBXProject "GodotRealityKit" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -36,17 +36,19 @@ bool MultiMeshLoader::update() {
 	PROFILE_FUNC_SCOPE;
 
 	for_each_valid([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return;
+		}
 		godot::RenderingServer *rs = rendering_server();
 		godot::RID multimesh_rid = multimeshes[idx].multimesh_rid;
 		ERR_FAIL_COND(!multimesh_rid.is_valid());
 
-		// Godot uses -1 for "all"; resolve and clamp it before mirroring the visible prefix to RealityKit.
+		uint32_t hash_state = HASH_MURMUR3_SEED;
 		const uint32_t instance_count = rs->multimesh_get_instance_count(multimesh_rid);
-		const int32_t requested_visible_count = rs->multimesh_get_visible_instances(multimesh_rid);
-		const uint32_t visible_count = requested_visible_count < 0 ?
-				instance_count :
-				godot::MIN(uint32_t(requested_visible_count), instance_count);
-		uint32_t hash_state = godot::hash_murmur3_one_32(visible_count, HASH_MURMUR3_SEED);
+		const int32_t visible_signed = rs->multimesh_get_visible_instances(multimesh_rid);
+		const uint32_t visible_count = visible_signed < 0
+				? instance_count
+				: godot::MIN((uint32_t)visible_signed, instance_count);
 
 		const bool instance_data_dirty = multimesh_transform_array_states[idx].capacity < instance_count;
 		if (instance_data_dirty) {
@@ -72,15 +74,16 @@ bool MultiMeshLoader::update() {
 			hash_state = godot::hash_murmur3_one_real(t.origin.y, hash_state);
 			hash_state = godot::hash_murmur3_one_real(t.origin.z, hash_state);
 		}
+		hash_state = godot::hash_murmur3_one_32(visible_count, hash_state);
 
 		const uint32_t hash = godot::hash_fmix32(hash_state);
 		if (instance_data_dirty | (multimesh_transform_array_states[idx].hash != hash)) {
+			multimeshes[idx].instance_data.setInstanceCount(visible_count);
+
 			for (uint32_t instance_idx = 0; instance_idx < visible_count; instance_idx++) {
 				const godot::Transform3D transform = rs->multimesh_instance_get_transform(multimesh_rid, instance_idx);
 				multimeshes[idx].instance_data.setTransform(instance_idx, to_matrix44(transform));
 			}
-			// Populate newly visible transforms before exposing them to RealityKit.
-			multimeshes[idx].instance_data.setInstanceCount(visible_count);
 
 			multimesh_transform_array_states[idx].hash = hash;
 		}

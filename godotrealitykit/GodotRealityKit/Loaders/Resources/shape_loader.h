@@ -42,14 +42,14 @@ public:
 
 	bool update();
 
-	swift::Optional<GodotRealityKit::ShapeResource> find_resource(godot::RID p_shape_rid) const {
+	GodotRealityKit::ShapeResource find_resource(godot::RID p_shape_rid) const {
 		if (!p_shape_rid.is_valid()) {
-			return swift::Optional<GodotRealityKit::ShapeResource>::none();
+			return GodotRealityKit::ShapeResource::init();
 		}
 
-		ERR_FAIL_COND_V(!shape_rid_to_idx.has(p_shape_rid), swift::Optional<GodotRealityKit::ShapeResource>::none());
+		ERR_FAIL_COND_V(!shape_rid_to_idx.has(p_shape_rid), GodotRealityKit::ShapeResource::init());
 		const uint32_t idx = shape_rid_to_idx.get(p_shape_rid);
-		return swift::Optional<GodotRealityKit::ShapeResource>::some(shapes[idx].resource);
+		return shapes[idx].resource;
 	}
 
 private:

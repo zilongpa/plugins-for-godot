@@ -128,7 +128,7 @@ uint32_t ProgramCache::create_program_async(const ShaderMaterialDescription &p_d
 		return UINT32_MAX;
 	}
 
-	VisualProgramBuilder builder(compiler, shader);
+	VisualProgramBuilder builder(compiler, p_description);
 	swift::Array<GodotRealityKit::ProgramPart> program_parts = swift::Array<GodotRealityKit::ProgramPart>::init();
 	bool success = builder.build(program_parts);
 	if (!success) {
@@ -227,8 +227,7 @@ uint32_t ProgramCache::create_broken_program_async() {
 	SG_DECLARATIONS(vertex::attributes);
 
 	SG(
-			let position_offset = compute_position_offset(position_attribute);
-			let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(position_offset, -, normal_attribute, bitangent_attribute);)
+			let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(-, -, normal_attribute, bitangent_attribute);)
 
 	SG(
 			let scaled_position = ND_multiply_vector3(position_attribute, (10.0f, 10.0f, 10.0f));

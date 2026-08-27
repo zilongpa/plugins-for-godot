@@ -17,6 +17,7 @@
 #import "resource_loaders.h"
 
 #include "Nodes/camera_loader.h"
+#include "Nodes/clipping_loader.h"
 #include "Nodes/collision_object_loader.h"
 #include "Nodes/cpu_particles_loader.h"
 #include "Nodes/csg_shape3d_loader.h"
@@ -45,7 +46,7 @@ using NodeLoaderSet = std::tuple<
 		RealityPortalMeshInstanceLoader, MeshInstanceLoader, MultiMeshInstanceLoader, GridMapLoader,
 		CPUParticlesLoader, CollisionObjectLoader, SpriteLoader, CSGShape3DLoader, DirectionalLightLoader, RealityKitDirectionalLightShadow3DLoader, PointLightLoader,
 		SpotLightLoader, LabelLoader, CameraLoader, SkeletonModifierLoader, RealityHoverEffectLoader,
-		RealityPortalCrossingLoader, WorldEnvironmentLoader, ImageBasedLightLoader, AnyNodeLoader>;
+		RealityPortalCrossingLoader, WorldEnvironmentLoader, ImageBasedLightLoader, RealityClippingLoader, AnyNodeLoader>;
 
 // Umbrella class for loading all node types, plus the camera.
 // Also manages mappings between Godot node IDs and RealityKit Entity IDs.
@@ -239,11 +240,87 @@ public:
 		return ibl_effects.get_effect(p_rid).ibl_entity;
 	}
 
+	// A rigid (scale = 1) rotation + translation; the clipping rig is always rigid so that the
+	// anchor's inverse is representable exactly (an RK Transform cannot store shear).
+	struct ClippingRigid {
+		GodotRealityKit::Vector4 rotation = GodotRealityKit::Vector4::init(0, 0, 0, 1);
+		GodotRealityKit::Vector3 translation = GodotRealityKit::Vector3::init(0, 0, 0);
+	};
+
+	struct ClippingParams {
+		ClippingRigid clipper; // rigid(T)
+		ClippingRigid anchor; // rigid(T)^-1
+		GodotRealityKit::Vector3 bounds_min = GodotRealityKit::Vector3::init(0, 0, 0);
+		GodotRealityKit::Vector3 bounds_max = GodotRealityKit::Vector3::init(0, 0, 0); // scale-folded, componentwise-sorted
+		bool feather_enabled = false;
+		GodotRealityKit::Vector3 feather_inset = GodotRealityKit::Vector3::init(0, 0, 0);
+		uint32_t falloff = 0;
+	};
+
+	// GodotRealityKit::Entity has no default constructor, so it can't live directly in a
+	// LocalVector (LocalVector::resize/clear requires default-constructibility of T even on the
+	// unreachable shrink path). Give the pending-teardown entities a default-constructible home.
+	struct ClippingRigEntities {
+		GodotRealityKit::Entity clipper = GodotRealityKit::Entity::init();
+		GodotRealityKit::Entity anchor = GodotRealityKit::Entity::init();
+	};
+
+	godot::RID clipping_create(uint64_t p_root_id, const ClippingParams &p_params) {
+		HierarchicalEffect<ClippingEffect> &clipping_effects = effects.get<ClippingEffect>();
+		ERR_FAIL_COND_V_MSG(clipping_effects.has(p_root_id), godot::RID(), "Node cannot have multiple clipping effects");
+		const GodotRealityKit::Vector3 unit = GodotRealityKit::Vector3::init(1, 1, 1);
+
+		GodotRealityKit::Entity clipper = GodotRealityKit::Entity::initAndMaterialize();
+		clipper.setParent(swift::Optional<GodotRealityKit::Entity>::some(root_entity));
+		clipper.setTransform(unit, p_params.clipper.rotation, p_params.clipper.translation);
+		clipper.setClippingComponent(p_params.bounds_min, p_params.bounds_max, p_params.feather_enabled, p_params.feather_inset, p_params.falloff);
+
+		GodotRealityKit::Entity anchor = GodotRealityKit::Entity::initAndMaterialize();
+		anchor.setParent(swift::Optional<GodotRealityKit::Entity>::some(clipper));
+		anchor.setTransform(unit, p_params.anchor.rotation, p_params.anchor.translation);
+
+		return clipping_effects.create(p_root_id, ClippingEffect{ .clipper_entity = clipper, .anchor_entity = anchor });
+	}
+
+	void clipping_update(uint64_t p_root_id, const ClippingParams &p_params) {
+		HierarchicalEffect<ClippingEffect> &clipping_effects = effects.get<ClippingEffect>();
+		ERR_FAIL_COND(!clipping_effects.has(p_root_id));
+		const GodotRealityKit::Vector3 unit = GodotRealityKit::Vector3::init(1, 1, 1);
+
+		ClippingEffect &effect = clipping_effects.get_effect(clipping_effects.get(p_root_id));
+		effect.clipper_entity.setTransform(unit, p_params.clipper.rotation, p_params.clipper.translation);
+		effect.anchor_entity.setTransform(unit, p_params.anchor.rotation, p_params.anchor.translation);
+		effect.clipper_entity.setClippingComponent(p_params.bounds_min, p_params.bounds_max, p_params.feather_enabled, p_params.feather_inset, p_params.falloff);
+	}
+
+	void clipping_free(uint64_t p_root_id) {
+		HierarchicalEffect<ClippingEffect> &clipping_effects = effects.get<ClippingEffect>();
+		ERR_FAIL_COND(!clipping_effects.has(p_root_id));
+
+		// Capture the rig entities before free() discards the effect struct. free() only queues a
+		// propagation that reparents the subtree back to root; that reparent must land (in
+		// NodeLoaders::update, after the flush) before we drop the rig, or content is momentarily
+		// orphaned. So defer dematerialize() to the teardown drain instead of doing it here.
+		ClippingEffect &effect = clipping_effects.get_effect(clipping_effects.get(p_root_id));
+		clipping_pending_teardown.push_back({ .clipper = effect.clipper_entity, .anchor = effect.anchor_entity });
+		clipping_effects.free(p_root_id);
+	}
+
+	GodotRealityKit::Entity get_clip_reparent_anchor(godot::RID p_rid) {
+		HierarchicalEffect<ClippingEffect> &clipping_effects = effects.get<ClippingEffect>();
+		return clipping_effects.get_effect(p_rid).anchor_entity;
+	}
+
 	void initialize(GodotRealityKit::Entity p_root_entity) {
 		root_entity = p_root_entity;
 	}
 
 	void update_deps(ResourceLoaderSet &p_resource_loaders);
+
+	void update_transforms();
+	void update_dirty_flags(const ResourceLoaderSet &p_resource_loaders);
+	void update_visibility_states(const ResourceLoaderSet &p_resource_loaders);
+	void update_deps_usage(ResourceLoaderSet &p_resource_loaders);
 
 	void update(ResourceLoaderSet &p_resource_loaders);
 
@@ -263,6 +340,10 @@ private:
 	GodotRealityKit::Entity root_entity = GodotRealityKit::Entity::initAndMaterialize();
 
 	HierarchicalEffectSet effects{ this };
+
+	// Drained by NodeLoaders::update, after flush_propagations has reparented removed clips'
+	// subtrees back to root, so it's safe to dematerialize the rig entities at that point.
+	godot::LocalVector<ClippingRigEntities> clipping_pending_teardown;
 };
 
 } // namespace gdrk

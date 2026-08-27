@@ -81,7 +81,7 @@ void DirectionalLightLoader::update(const ResourceLoaderSet &p_resource_loaders)
 			}
 		}
 
-		float intensity = LightTunning::get_light_intensity(*node) * world_scale;
+		float intensity = LightTunning::get_light_intensity(*node);
 		godot::Color color = node->get_color();
 		uint32_t hash = godot::hash_murmur3_one_float(intensity);
 		hash = godot::hash_murmur3_one_32(color.to_rgba32(), hash);

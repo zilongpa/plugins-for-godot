@@ -12,6 +12,8 @@
 #include <cstring>
 #include <type_traits>
 
+#import "clipping_3d.h"
+#import "controller_xr_interface.h"
 #import "directional_light_shadow_3d.h"
 #import "hover_effect_3d.h"
 #import "image_based_light_3d.h"
@@ -33,6 +35,7 @@
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/window.hpp>
+#include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
 #if !TARGET_OS_OSX
@@ -40,8 +43,11 @@
 #endif
 
 #import <Foundation/Foundation.h>
+#import <GameController/GameController.h>
 
 namespace gdrk {
+
+void install_renderer_relaunch_guard();
 
 void initialize_gdrk_module(godot::ModuleInitializationLevel p_level) {
 	godot::ProjectSettings *project_settings = godot::ProjectSettings::get_singleton();
@@ -49,6 +55,8 @@ void initialize_gdrk_module(godot::ModuleInitializationLevel p_level) {
 	if (p_level == godot::MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		// This is a setting required by all Godot visionOS projects, so we set it for convenience here
 		project_settings->set_setting("rendering/textures/vram_compression/import_etc2_astc", true);
+
+		install_renderer_relaunch_guard();
 	}
 
 	if (p_level == godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
@@ -61,8 +69,10 @@ void initialize_gdrk_module(godot::ModuleInitializationLevel p_level) {
 		GDREGISTER_RUNTIME_CLASS(MultiMeshLoader);
 		GDREGISTER_RUNTIME_CLASS(ShapeLoader);
 		GDREGISTER_RUNTIME_CLASS(NodeLoaders);
+		GDREGISTER_RUNTIME_CLASS(RealityControllerXRInterface);
 		GDREGISTER_CLASS(RealityVolumeCamera3D);
 		GDREGISTER_CLASS(RealityHoverEffect3D);
+		GDREGISTER_CLASS(RealityClipping3D);
 		GDREGISTER_CLASS(RealityPortalMeshInstance3D);
 		GDREGISTER_CLASS(RealityPortalCrossing3D);
 		GDREGISTER_CLASS(RealityImageBasedLight3D);
@@ -110,8 +120,12 @@ void GDRKBridgeDelegate::printError(const char *p_msg) {
 	ERR_PRINT(p_msg);
 }
 
-bool GDRKBridgeDelegate::ExtensionSettings::should_convert_worldenvironment() const {
-	switch (worldenvironment) {
+void GDRKBridgeDelegate::printWarning(const char *p_msg) {
+	WARN_PRINT(p_msg);
+}
+
+bool GDRKBridgeDelegate::ExtensionSettings::should_convert_world_environment() const {
+	switch (world_environment) {
 		case WorldEnvironmentConversion::kEnable:
 			return true;
 		case WorldEnvironmentConversion::kDisable:
@@ -191,20 +205,30 @@ GDRKBridgeDelegate::ExtensionSettings GDRKBridgeDelegate::getExtensionSettings()
 		// World Environment conversion
 		{
 			godot::String value = "Automatic";
-			const auto key = "reality_kit/worldenvironment";
+			const auto key = "reality_kit/world_environment";
 			if (project_settings->has_setting(key)) {
 				value = project_settings->get(key).stringify();
 			}
 			if (value == "Automatic") {
-				cached.worldenvironment = WorldEnvironmentConversion::kAutomatic;
+				cached.world_environment = WorldEnvironmentConversion::kAutomatic;
 			} else if (value == "Enable") {
-				cached.worldenvironment = WorldEnvironmentConversion::kEnable;
+				cached.world_environment = WorldEnvironmentConversion::kEnable;
 			} else if (value == "Disable") {
-				cached.worldenvironment = WorldEnvironmentConversion::kDisable;
+				cached.world_environment = WorldEnvironmentConversion::kDisable;
 			} else {
-				printf("Unsupported reality_kit/worldenvironment \"%s\"\n", value.utf8().ptrw());
-				cached.worldenvironment = WorldEnvironmentConversion::kAutomatic;
+				printf("Unsupported reality_kit/world_environment \"%s\"\n", value.utf8().ptrw());
+				cached.world_environment = WorldEnvironmentConversion::kAutomatic;
 			}
+		}
+
+		// Portal world scale
+		{
+			float value = 0.0f;
+			const auto key = "reality_kit/portal_presentation_world_scale";
+			if (project_settings->has_setting(key)) {
+				value = (float)project_settings->get_setting(key);
+			}
+			cached.portalWorldScale = value;
 		}
 	}
 	return cached;
@@ -266,7 +290,7 @@ void GDRKBridgeDelegate::setPHASETransform(GDRKTransform gdrk_transform) const {
 	transform.origin = convert(gdrk_transform.position);
 	transform.basis.set_quaternion(convert(gdrk_transform.orientation));
 	transform.basis.scale(convert(gdrk_transform.scale));
-	// phasegodot's transform_to_simd_float4x4 treats Godot basis rows as SIMD
+	// godotphase's transform_to_simd_float4x4 treats Godot basis rows as SIMD
 	// columns, which transposes the rotation. Pre-transpose to compensate.
 	transform.basis.transpose();
 	phase_manager->call("set_world_transform", transform);
@@ -301,9 +325,12 @@ UIImage *GDRKBridgeDelegate::getBootSplashImage() const {
 	if (image_path.is_empty()) {
 		// Mirror upstream Godot's setup_boot_logo() fallback: when no custom
 		// boot splash is set, render the default Godot splash baked into the binary.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc++11-narrowing"
 		static constexpr unsigned char default_splash_png[] = {
 #embed "splash.png"
 		};
+#pragma clang diagnostic pop
 		godot::PackedByteArray buffer;
 		buffer.resize(sizeof(default_splash_png));
 		memcpy(buffer.ptrw(), default_splash_png, sizeof(default_splash_png));
@@ -469,8 +496,74 @@ GDRKTransform GDRKBridgeDelegate::getXROrigin() const {
 
 	const float inv_world_scale = 1.0f / xr_server->get_world_scale();
 	const godot::Transform3D world_origin = xr_server->get_world_origin();
-	const godot::Vector3 inv_world_scale_vector = godot::Vector3(inv_world_scale, inv_world_scale, inv_world_scale);
-	return gdrk::to_transform(world_origin.scaled(inv_world_scale_vector));
+	return GDRKTransform{
+		.scale = simd_make_float3(inv_world_scale, inv_world_scale, inv_world_scale),
+		.position = gdrk::to_simd3(world_origin.get_origin()),
+		.orientation = gdrk::to_quatf(world_origin.get_basis().get_rotation_quaternion()),
+	};
+}
+
+bool GDRKBridgeDelegate::wantsControllerAnchors() const {
+	return gdrk::RealityControllerXRInterface::get_active() != nullptr;
+}
+
+void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
+	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
+	if (controller_interface == nullptr) {
+		return;
+	}
+
+	godot::Transform3D pose;
+	pose.basis.set_quaternion(convert(p_transform.orientation));
+	pose.basis.scale(convert(p_transform.scale));
+	pose.origin = convert(p_transform.position);
+
+	const godot::XRPositionalTracker::TrackerHand hand = p_hand == kLeftHand
+			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
+			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
+
+	controller_interface->set_anchor_pose(hand, pose, p_tracked);
+}
+
+void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {
+	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
+	if (controller_interface == nullptr || p_gc_controller == nullptr) {
+		return;
+	}
+
+	GCController *gc_controller = (__bridge GCController *)p_gc_controller;
+	GCControllerLiveInput *input = gc_controller.input;
+	if (input == nil) {
+		return;
+	}
+
+	auto button_value = [&](GCInputButtonName name) -> float {
+		id<GCButtonElement> button = input.buttons[name];
+		return button ? button.pressedInput.value : 0.0f;
+	};
+	auto button_pressed = [&](GCInputButtonName name) -> bool {
+		id<GCButtonElement> button = input.buttons[name];
+		return button ? button.pressedInput.isPressed : false;
+	};
+
+	gdrk::RealityControllerXRInterface::ControllerInput in;
+	in.trigger = button_value(GCInputTrigger);
+	in.trigger_click = button_pressed(GCInputTrigger);
+	in.grip = button_value(GCInputGripButton);
+	in.grip_click = button_pressed(GCInputGripButton);
+	in.primary_button = button_pressed(GCInputButtonA);
+	in.secondary_button = button_pressed(GCInputButtonB);
+	in.menu_button = button_pressed(GCInputButtonMenu);
+	id<GCDirectionPadElement> thumbstick = input.dpads[GCInputThumbstick];
+	if (thumbstick != nil) {
+		in.thumbstick = godot::Vector2(thumbstick.xAxis.value, thumbstick.yAxis.value);
+	}
+	in.thumbstick_click = button_pressed(GCInputThumbstickButton);
+
+	const godot::XRPositionalTracker::TrackerHand hand = p_hand == kLeftHand
+			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
+			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
+	controller_interface->set_controller_input(hand, in, p_gc_controller);
 }
 
 void log_version() {

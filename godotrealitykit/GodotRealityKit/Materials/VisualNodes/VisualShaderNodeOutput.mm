@@ -12,9 +12,16 @@
 #include "VisualShaderNodeOutput.h"
 #include "Supported.h"
 
+#include "../program_description.h"
+
 #include <godot_cpp/classes/visual_shader_node_output.hpp>
 using namespace gdrk;
 using namespace gdrk::vs;
+
+// FLT_MIN expressed as an SGL float literal. Bound as the alpha-scissor threshold for opaque
+// materials that don't author one, so the scissor path runs but never actually clips a fragment
+// ("always pass").
+static constexpr const char *kAlwaysPassOpacityThreshold = "0.0000000000000000000000000000000000000117549435082228750f";
 
 // clang-format off
 DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
@@ -22,6 +29,8 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 		return p_type == ShaderType::ST_FRAGMENT ? (uint32_t)FragmentOutput::FO_COUNT
 												 : (uint32_t)VertexOutput::VO_COUNT;
 	}
+
+
 
 	inline static Span<std::string> init_fragment_defaults() {
 		// The documentation for the the VisualShader nodes is very limited in godot, the best
@@ -41,7 +50,7 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 		fragment_defaults[FragmentOutput::FO_AO] = sgl::number::one<float>();
 		fragment_defaults[FragmentOutput::FO_AO_LIGHT_EFFECT] = sgl::number::zero<float>();
 
-		fragment_defaults[FragmentOutput::FO_NORMAL] = sgl::builtin::normal::tangent();
+		fragment_defaults[FragmentOutput::FO_NORMAL] = sgl::builtin::normal::view();
 		fragment_defaults[FragmentOutput::FO_NORMAL_MAP] = sgl::builtin::normal::tangent();
 		fragment_defaults[FragmentOutput::FO_NORMAL_MAP_DEPTH] = sgl::number::one<float>();
 		
@@ -72,9 +81,8 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 	inline static Span<std::string> init_vertex_defaults() {
 		static std::string vertex_defaults[VertexOutput::VO_COUNT] = {};
 		vertex_defaults[VertexOutput::VO_POSITION] = gdrk::sgl::builtin::vertex::position();
-		vertex_defaults[VertexOutput::VO_COLOR] = sgl::builtin::vertex::color();
-		vertex_defaults[VertexOutput::VO_ALPHA] = sgl::number::one<float>();
-		
+		vertex_defaults[VertexOutput::VO_COLOR] = std::format("vec4f_to_vec3f({})", sgl::builtin::vertex::color());
+		vertex_defaults[VertexOutput::VO_ALPHA] = std::format("v4_w({})", sgl::builtin::vertex::color());
 
 		vertex_defaults[VertexOutput::VO_UV] = sgl::builtin::vertex::uv0();
 		vertex_defaults[VertexOutput::VO_UV2] = sgl::builtin::vertex::uv1();
@@ -163,6 +171,76 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 		}
 	}
 
+	// Returns the r-value expression for the tangent-space normal handed to
+	// `ND_realitykit_pbr_surfaceshader`. FO_NORMAL is authored in view space; FO_NORMAL_MAP is already
+	// tangent space; the surface shader wants tangent space. We only pay for view<->tangent transforms
+	// when FO_NORMAL is actually driven — otherwise the geometric-normal contribution is just the
+	// unperturbed tangent normal (0, 0, 1), so the whole basis round-trip collapses to a tangent-space
+	// blend (or nothing at all). When the view-space path is taken the TBN basis and conversion
+	// helpers are emitted as their own code part so the returned expression can reference them.
+	static std::string get_fragment_normal_expression(VisualProgramBuilderContext &p_context,
+			const VisualShaderNodeWrapper &p_node_wrapper) {
+		bool normal_is_default = false;
+		bool normal_map_is_default = false;
+		const std::string normal = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL, normal_is_default);
+		const std::string normal_map = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL_MAP, normal_map_is_default);
+		const std::string normal_map_depth = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL_MAP_DEPTH);
+
+		// Nothing perturbs the surface: the unperturbed tangent normal, no transforms.
+		if (normal_is_default && normal_map_is_default) {
+			return "-";
+		}
+
+		// Only a tangent-space normal map is connected: blend it against the unperturbed normal
+		// entirely in tangent space — still no view<->tangent transforms.
+		if (normal_is_default) {
+			return std::format("ND_mix_vector3({}, {}, {})", sgl::builtin::normal::tangent(), normal_map, normal_map_depth);
+		}
+
+		// FO_NORMAL is driven in view space: declare the view-space TBN basis and conversion helpers,
+		// then combine in view space and convert the result back to tangent space.
+		p_context.code_parts.push_back(std::format(R"""(
+				let VisualShaderNodeOutput_tangent_view = {0};
+				let VisualShaderNodeOutput_bitangent_view = {1};
+				let VisualShaderNodeOutput_normal_view = {2};
+				let VisualShaderNodeOutput_view_to_tangent = {{ (dir) in
+					let x = ND_dotproduct_vector3(dir, VisualShaderNodeOutput_tangent_view);
+					let y = ND_dotproduct_vector3(dir, VisualShaderNodeOutput_bitangent_view);
+					let z = ND_dotproduct_vector3(dir, VisualShaderNodeOutput_normal_view);
+					ND_normalize_vector3(ND_combine3_vector3(x, y, z))
+				}};
+				let VisualShaderNodeOutput_tangent_to_view = {{ (dir) in
+					let vx = ND_multiply_vector3FA(VisualShaderNodeOutput_tangent_view, v3_x(dir));
+					let vy = ND_multiply_vector3FA(VisualShaderNodeOutput_bitangent_view, v3_y(dir));
+					let vz = ND_multiply_vector3FA(VisualShaderNodeOutput_normal_view, v3_z(dir));
+					ND_add_vector3(ND_add_vector3(vx, vy), vz)
+				}};
+			)""",
+				gdrk::sgl::builtin::tangent::view(),
+				gdrk::sgl::builtin::bitangent::view(),
+				gdrk::sgl::builtin::normal::view()));
+
+		return std::format(
+				"VisualShaderNodeOutput_view_to_tangent(ND_mix_vector3({}, VisualShaderNodeOutput_tangent_to_view({}), {}))",
+				normal, normal_map, normal_map_depth);
+	}
+
+	static std::string get_vertex_position_offset_expression(VisualProgramBuilderContext &p_context,
+			const VisualShaderNodeWrapper &p_node_wrapper) {
+		bool position_is_default = true;
+		std::string position_expression = p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_POSITION, position_is_default);
+		
+		if (position_is_default) {
+			return "-";
+		}
+		
+		p_context.code_parts.push_back(std::format(R"""(
+				let VisualShaderNodeOutput_input_position = {};
+				let VisualShaderNodeOutput_position_offset = compute_position_offset(VisualShaderNodeOutput_input_position);
+		)""", position_expression));
+		
+		return "VisualShaderNodeOutput_position_offset";
+	}
 
 	EXPRESSION(p_context, p_node_wrapper) {
 		bool default_alpha = true;
@@ -187,40 +265,32 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 			} else {
 				uv1_expression = p_context.varying_allocator.get_vertex_expression_for_uv(1);
 			}
-
+			
+			bool default_vertex_color = true;
+			std::string vertex_color_expression = p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_COLOR, default_vertex_color);
+			std::string alpha_expression = p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_ALPHA, default_alpha);
+			std::string vertex_color_param = default_vertex_color && default_alpha ? "-" : "VisualShaderNodeOutput_vertex_color";
+			
 			p_context.code_parts.push_back(std::format(R"""(
-						let VisualShaderNodeOutput_input_position = {};
-						let VisualShaderNodeOutput_position_offset = compute_position_offset(VisualShaderNodeOutput_input_position);
-						let VisualShaderNodeOutput_color = {};
-						let VisualShaderNodeOutput_alpha = {};
-						let VisualShaderNodeOutput_normal = {};
-						let VisualShaderNodeOutput_tangent = {};
-						let VisualShaderNodeOutput_bitangent = {};
-						let VisualShaderNodeOutput_uv0 = {};
-						let VisualShaderNodeOutput_uv1 = {};
-						let VisualShaderNodeOutput_uv2 = {};
-						let VisualShaderNodeOutput_uv3 = {};
-						let VisualShaderNodeOutput_uv4 = {};
-						let VisualShaderNodeOutput_uv5 = {};
-						let VisualShaderNodeOutput_uv6 = {};
-						let VisualShaderNodeOutput_uv7 = {};
-	   
+						let VisualShaderNodeOutput_color = {1};
+						let VisualShaderNodeOutput_alpha = {3};
+						let VisualShaderNodeOutput_normal = compute_normal({4});
+						let VisualShaderNodeOutput_tangent = {5};
+						let VisualShaderNodeOutput_bitangent = compute_bitangent({6});
 						let VisualShaderNodeOutput_vertex_color = ND_combine4_color4(v3_x(VisualShaderNodeOutput_color), v3_y(VisualShaderNodeOutput_color), v3_z(VisualShaderNodeOutput_color), VisualShaderNodeOutput_alpha);
 	   
 						let geometry_modifier = ND_realitykit_geometrymodifier_2_0_vertexshader(
-							VisualShaderNodeOutput_position_offset,
-							VisualShaderNodeOutput_vertex_color,
+							{0},
+							{2},
 							VisualShaderNodeOutput_normal, 
 							VisualShaderNodeOutput_bitangent,
-							VisualShaderNodeOutput_uv0, VisualShaderNodeOutput_uv1,
-							VisualShaderNodeOutput_uv2, VisualShaderNodeOutput_uv3,
-							VisualShaderNodeOutput_uv4, VisualShaderNodeOutput_uv5,
-							VisualShaderNodeOutput_uv6, VisualShaderNodeOutput_uv7
+							{7}, {8}, {9}, {10}, {11}, {12}, {13}, {14}
 						);
 				)""",
-					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_POSITION),
-					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_COLOR),
-					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_ALPHA, default_alpha),
+				    get_vertex_position_offset_expression(p_context, p_node_wrapper),
+					vertex_color_expression,
+					vertex_color_param,
+					alpha_expression,
 					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_NORMAL),
 					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_TANGENT),
 					p_node_wrapper.get_input_expression(p_context, VertexOutput::VO_BINORMAL),
@@ -236,59 +306,96 @@ DEFINE_SUPPORTED_NODE(VisualShaderNodeOutput)
 			));
 		} else {
 			
+			const bool unshaded = p_context.material_description->render_mode.get_flag(RenderModeDescription::FLAG_UNSHADED);
+			const char *selected_surface_shader = unshaded ? "surface_shader_unlit" : "surface_shader_pbr";
+
+			const std::string surface_normal_expression = get_fragment_normal_expression(p_context, p_node_wrapper);
+
+			// Alpha policy: decide whether the material is transparent and how the alpha-scissor
+			// threshold is bound. A connected ALPHA, a non-mix blend, depth_draw_never or
+			// depth_test_disabled all make the material transparent; an authored alpha-scissor
+			// threshold promotes it back to opaque. Transparent materials disable the scissor with the
+			// '-' sentinel; opaque materials keep the scissor path, defaulting to an always-pass
+			// threshold so nothing is actually clipped when none was authored.
+			bool alpha_is_default = true;
+			const std::string opacity_parameter = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALPHA, "-", alpha_is_default);
+			const bool uses_alpha = !alpha_is_default;
+
+			bool opacity_threshold_is_default = true;
+			std::string opacity_threshold = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALPHA_SCISSOR_THRESHOLD, opacity_threshold_is_default);
+			const bool uses_opacity_threshold = !opacity_threshold_is_default;
+
+			const RenderModeDescription &render_mode = p_context.material_description->render_mode;
+			const bool has_blend_alpha = render_mode.blend != RenderModeDescription::BLEND_MIX;
+			const bool no_depth_draw = render_mode.depth_draw == RenderModeDescription::DEPTH_DRAW_NEVER;
+			const bool no_depth_test = render_mode.get_flag(RenderModeDescription::FLAG_DEPTH_TEST_DISABLED);
+
+			bool is_material_transparent = uses_alpha || has_blend_alpha || no_depth_draw || no_depth_test;
+			if (uses_opacity_threshold) {
+				is_material_transparent = false;
+			}
+			p_context.is_transparent = is_material_transparent;
+
+			std::string alpha_scissor_param = "-";
+			if (!is_material_transparent) {
+				if (opacity_threshold_is_default) {
+					opacity_threshold = kAlwaysPassOpacityThreshold;
+				}
+				alpha_scissor_param = "VisualShaderNodeOutput_opacityThreshold";
+			}
 			
+			bool emission_is_default = true;
+			std::string emission_parameter = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_EMISSION, "-", emission_is_default);
+			if (!emission_is_default) {
+				emission_parameter = std::format("vec3f_to_rgb({})", emission_parameter);
+			}
+			
+			bool albedo_is_default = true;
+			std::string albedo_parameter = p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALBEDO, "-", albedo_is_default);
+			if (!albedo_is_default) {
+				albedo_parameter = std::format("vec3f_to_rgb({})", albedo_parameter);
+			}
+
 			p_context.code_parts.push_back(std::format(R"""(
-							let VisualShaderNodeOutput_albedo = vec3f_to_rgb({});
-							let VisualShaderNodeOutput_emissive_color = vec3f_to_rgb({});
-							let VisualShaderNodeOutput_normal = {};
-							let VisualShaderNodeOutput_normalMap = {};
-							let VisualShaderNodeOutput_normalMapDepth = {};
-							let VisualShaderNodeOutput_roughness = {};
-							let VisualShaderNodeOutput_metallic = {};
-							let VisualShaderNodeOutput_ambientOcclusion = {};
-							let VisualShaderNodeOutput_specular = {};
-							let VisualShaderNodeOutput_opacity = {};
-							let VisualShaderNodeOutput_opacityThreshold = {};
-							let VisualShaderNodeOutput_clearcoat = {};
-							let VisualShaderNodeOutput_clearcoatRoughness = {};
+							let VisualShaderNodeOutput_opacityThreshold = {8};
+		
 							let VisualShaderNodeOutput_clearcoatNormal = (0.0f, 0.0f, 1.0f);
-							let VisualShaderNodeOutput_hasPremultipliedAlpha = {};
-							
-							let surface_shader_pbr = ND_realitykit_pbr_surfaceshader(VisualShaderNodeOutput_albedo, 
-									VisualShaderNodeOutput_emissive_color, 
-									VisualShaderNodeOutput_normal,
-									VisualShaderNodeOutput_roughness,
-									VisualShaderNodeOutput_metallic, 
-									VisualShaderNodeOutput_ambientOcclusion, 
-									VisualShaderNodeOutput_specular, 
-									VisualShaderNodeOutput_opacity, 
-									VisualShaderNodeOutput_opacityThreshold, 
-									VisualShaderNodeOutput_clearcoat, 
-									VisualShaderNodeOutput_clearcoatRoughness, 
-									VisualShaderNodeOutput_clearcoatNormal,
-									VisualShaderNodeOutput_hasPremultipliedAlpha
+							let VisualShaderNodeOutput_hasPremultipliedAlpha = {11};
+	 
+							let surface_shader_pbr = ND_realitykit_pbr_surfaceshader({0},
+									{1},
+									{2},
+									{3},
+									{4},
+									{5},
+									{6},
+									{7},
+									{12},
+									{9},
+									{10},
+									-,
+									{11}
 								);
-									 
-							let surface_shader_unlit_debug = ND_realitykit_unlit_surfaceshader(VisualShaderNodeOutput_albedo, VisualShaderNodeOutput_opacity, -, false, false);
-							let surface_shader = surface_shader_pbr;
+
+							let surface_shader_unlit = ND_realitykit_unlit_surfaceshader({0}, {7}, {12}, false, {11});
+							let surface_shader = {13};
 					)""",
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALBEDO),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_EMISSION),
-				    p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL_MAP),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_NORMAL_MAP_DEPTH),
+				    albedo_parameter,
+					emission_parameter,
+					surface_normal_expression,
 					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ROUGHNESS),
 					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_METALLIC),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_AO),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_SPECULAR),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALPHA, default_alpha),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_ALPHA_SCISSOR_THRESHOLD),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_CLEAR_COAT),
-					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_CLEAR_COAT_ROUGHNESS),
-					false
+					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_AO, "-"),
+					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_SPECULAR, "-"),
+					opacity_parameter,
+					opacity_threshold,
+					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_CLEAR_COAT, "-"),
+					p_node_wrapper.get_input_expression(p_context, FragmentOutput::FO_CLEAR_COAT_ROUGHNESS, "-"),
+					false,
+					alpha_scissor_param,
+					selected_surface_shader
+					
 			));
 		}
-
-		p_context.requires_alpha_blending |= !default_alpha;
 	}
 END(VisualShaderNodeOutput)

@@ -120,6 +120,12 @@ void CollisionObjectLoader::update_deps(
 	shape_deps.replace_changed(changed_shape_deps, shapes);
 }
 
+void CollisionObjectLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+}
+
+void CollisionObjectLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+}
+
 void CollisionObjectLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 	PROFILE_FUNC_SCOPE;
 
@@ -189,9 +195,9 @@ void CollisionObjectLoader::update(const ResourceLoaderSet &p_resource_loaders) 
 			for (uint32_t shape_id = 0; shape_id < shape_count; shape_id++) {
 				godot::Ref<godot::Shape3D> shape = node->shape_owner_get_shape(owner_id, shape_id);
 				if (shape.is_valid()) {
-					swift::Optional<GodotRealityKit::ShapeResource> resource = shapes->find_resource(shape->get_rid());
+					GodotRealityKit::ShapeResource resource = shapes->find_resource(shape->get_rid());
 					if (resource.isSome()) {
-						GodotRealityKit::ShapeResource transformed_resource = !owner_transform.is_equal_approx(godot::Transform3D()) ? resource.get().offsetBy(owner_translation, owner_rotation) : resource.get();
+						GodotRealityKit::ShapeResource transformed_resource = !owner_transform.is_equal_approx(godot::Transform3D()) ? resource.offsetBy(owner_translation, owner_rotation) : resource;
 						resources.append(transformed_resource);
 					}
 				}

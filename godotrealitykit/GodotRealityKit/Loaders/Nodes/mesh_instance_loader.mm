@@ -51,13 +51,14 @@ void MeshInstanceLoaderBase<Derived, MeshInstance>::update_deps(
 
 	Base::update_deps(p_resource_loaders);
 
-	ChangedMeshDependencyListSet changed_mesh_deps = ChangedMeshDependencyListSet(Self::get_capacity());
+	ChangedDependencyListSet changed_mesh_deps = ChangedDependencyListSet(Self::get_capacity());
 	ChangedDependencyListSet changed_material_deps = ChangedDependencyListSet(Self::get_capacity());
 
 	Self::for_each_removed([&](uint32_t idx) {
 		changed_mesh_deps.mark_changed(idx);
 		changed_material_deps.mark_changed(idx);
 	});
+
 	Self::for_each_valid([&](uint32_t idx) {
 		MeshInstance *node = Self::nodes[idx];
 
@@ -71,7 +72,10 @@ void MeshInstanceLoaderBase<Derived, MeshInstance>::update_deps(
 
 		const uint32_t mesh_hash = godot::hash_fmix32(mesh_hash_state);
 		if (mesh_hash != dep_states[idx].mesh_hash) {
-			add_mesh_deps(changed_mesh_deps, meshes, idx, node);
+			const SmallLocalVector<uint32_t, 8> mesh_indices = add_mesh_deps(changed_mesh_deps, meshes, idx, node);
+			if (mesh_indices.size()) {
+				dep_states[idx].mesh_index = mesh_indices[0];
+			}
 			dep_states[idx].mesh_hash = mesh_hash;
 		}
 
@@ -118,14 +122,9 @@ void MeshInstanceLoaderBase<Derived, MeshInstance>::update_deps(
 }
 
 template <typename Derived, std::derived_from<godot::MeshInstance3D> MeshInstance>
-void MeshInstanceLoaderBase<Derived, MeshInstance>::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
-
-	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
-	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
-	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
-
-	Base::update(p_resource_loaders);
+void MeshInstanceLoaderBase<Derived, MeshInstance>::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	const MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	const MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
 
 	Base::dirty_idxs.merge(mesh_deps.changed());
 	if (meshes->has_dirty()) {
@@ -144,18 +143,60 @@ void MeshInstanceLoaderBase<Derived, MeshInstance>::update(const ResourceLoaderS
 			}
 		}
 	}
+}
 
-	if constexpr (Derived::manages_visibility_state) {
-		static_cast<Derived *>(this)->update_visibility_state(meshes);
+template <typename Derived, std::derived_from<godot::MeshInstance3D> MeshInstance>
+void MeshInstanceLoaderBase<Derived, MeshInstance>::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	for (Dependency dep : mesh_deps.get()) {
+		if (this->is_valid(dep.dst)) {
+			if constexpr (Derived::manages_visibility_state) {
+				if (!static_cast<const Derived *>(this)->is_visible(dep.dst)) {
+					continue;
+				}
+				if (!static_cast<const Derived *>(this)->is_enabled(dep.dst)) {
+					continue;
+				}
+			}
+			meshes->mark_used_in_frame(dep.src);
+		}
 	}
+	for (Dependency dep : material_deps.get()) {
+		if (this->is_valid(dep.dst)) {
+			if constexpr (Derived::manages_visibility_state) {
+				if (!static_cast<const Derived *>(this)->is_visible(dep.dst)) {
+					continue;
+				}
+				if (!static_cast<const Derived *>(this)->is_enabled(dep.dst)) {
+					continue;
+				}
+			}
+			materials->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+template <typename Derived, std::derived_from<godot::MeshInstance3D> MeshInstance>
+void MeshInstanceLoaderBase<Derived, MeshInstance>::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
 
 	Self::for_each_dirty_and_visible([&](uint32_t idx) {
+		if (!Base::is_enabled(idx)) {
+			return;
+		}
 		MeshInstance *node = Self::nodes[idx];
 		ERR_FAIL_NULL(node);
 
 		Self::node_entities[idx].entity.clearChildren();
-		for (uint32_t surface_idx = 0; surface_idx < mesh_get_surface_count(node); surface_idx++) {
-			GodotRealityKit::Entity child = mesh_surface_to_entity(node, surface_idx, meshes, materials, multimeshes);
+		for (GodotRealityKit::Entity child : node_to_entities(node, meshes, materials, multimeshes)) {
 			Self::node_entities[idx].entity.addChild(child);
 		}
 	});
@@ -191,30 +232,23 @@ void MeshInstanceLoader::update_visibility_state(const MeshLoader *p_meshes) {
 	for_each_valid([&](uint32_t index) {
 		CullingState &culling_state = culling_states[index];
 
-		if (is_dirty(index)) {
-			const godot::RenderingServer *rs = rendering_server();
+		const bool recompute_aabb = is_dirty(index) || p_meshes->did_change_in_frame(dep_states[index].mesh_index);
+		if (recompute_aabb) {
 			godot::MeshInstance3D *node = nodes[index];
 			const godot::RID mesh_rid = node->get_base();
-			const uint32_t surface_count = rs->mesh_get_surface_count(mesh_rid);
-			if (surface_count == 0) {
+			if (rendering_server()->mesh_get_surface_count(mesh_rid) == 0) {
 				return;
 			}
 
-			CullingState &culling_state = culling_states[index];
-			godot::Ref<godot::SkinReference> skin_ref = Base::node_parent_skeleton_idxs.has(index) ? node->get_skin_reference() : nullptr;
-			const bool has_skeleton = skin_ref.is_valid();
+			const bool has_skeleton = Base::node_parent_skeleton_idxs.has(index);
 			const bool has_blend_shapes = node->get_blend_shape_count() > 0;
 			const uint64_t instance_id = (has_skeleton || has_blend_shapes) ? node->get_instance_id() : 0;
 
-			// Union bounds across all surfaces so multi-surface meshes get the correct bounding volume.
-			godot::AABB bounds = p_meshes->get_bounds(mesh_rid, instance_id, 0);
-			for (uint32_t surface_idx = 1; surface_idx < surface_count; surface_idx++) {
-				godot::AABB surface_bounds = p_meshes->get_bounds(mesh_rid, instance_id, surface_idx);
-				bounds.merge_with(surface_bounds);
+			const godot::AABB new_aabb = p_meshes->get_aabb(mesh_rid, instance_id);
+			if (new_aabb != culling_state.local_aabb) {
+				culling_state.local_aabb = new_aabb;
+				culling_state.transform_updated = true;
 			}
-
-			culling_state.local_aabb = bounds;
-			culling_state.transform_updated = true;
 		}
 
 		// Portal world content (descendants of a portal's target node) is rendered
@@ -232,13 +266,16 @@ void MeshInstanceLoader::update_visibility_state(const MeshLoader *p_meshes) {
 		}
 
 		if (culling_state.transform_updated) {
-			godot::AABB world_aabb;
-			if (in_portal_world) {
-				constexpr float k = 1e9f;
-				world_aabb = godot::AABB(godot::Vector3(-k, -k, -k), godot::Vector3(2 * k, 2 * k, 2 * k));
-			} else {
+			constexpr float k = 1e9f;
+			static godot::AABB invalid_aabb = godot::AABB(godot::Vector3(-k, -k, -k), godot::Vector3(2 * k, 2 * k, 2 * k));
+			godot::AABB world_aabb = invalid_aabb;
+			if (!in_portal_world) {
 				godot::Transform3D &transform = node_transform_states[index];
-				world_aabb = transform.xform(culling_state.local_aabb);
+				if (transform.get_basis().get_scale().length() == 0) {
+					world_aabb = invalid_aabb;
+				} else {
+					world_aabb = transform.xform(culling_state.local_aabb);
+				}
 			}
 			culling_state.transform_updated = false;
 			culling_system.update_entry(index, 0, world_aabb);
@@ -285,6 +322,19 @@ void MeshInstanceLoader::update_visibility_state(const MeshLoader *p_meshes) {
 void MeshInstanceLoader::on_transform_changed(uint32_t p_idx, const godot::Transform3D &transform) {
 	culling_states[p_idx].transform_updated = true;
 	Base::on_transform_changed(p_idx, transform);
+}
+
+void MeshInstanceLoader::_on_visibility_changed(uint32_t p_idx) {
+	Base::_on_visibility_changed(p_idx);
+	const bool now_enabled = node_entities[p_idx].enabled;
+
+	if (now_enabled) {
+		mark_dirty(p_idx);
+	} else {
+		if (is_registered(p_idx)) {
+			node_entities[p_idx].entity.clearChildren();
+		}
+	}
 }
 
 #pragma mark - RealityPortalMeshInstanceLoader

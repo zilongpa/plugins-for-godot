@@ -18,6 +18,10 @@ public struct EnvironmentResource: @unchecked Sendable {
         self.value = nil
     }
 
+    public func isSome() -> Bool {
+        return value != nil
+    }
+
     public mutating func loadFromEquirectangularMTLTextureSync(_ mtlTexture: sending MTLTexture) {
         MainActor.assumeIsolated {
             do {

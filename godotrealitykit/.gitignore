@@ -7,4 +7,5 @@ xcuserdata/
 .DS_Store
 __pycache__/
 .sconsign.dblite
+GodotRealityKit/Configurations/build.gen.xcconfig
 *.pyc

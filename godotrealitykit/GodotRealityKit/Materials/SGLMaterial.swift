@@ -105,6 +105,10 @@ public enum ParameterType {
 }
 
 public class SGLProgram: @unchecked Sendable {
+    static let transparentSortGroup = RealityKit.ModelSortGroup()
+    static let depthPostpassSortGroup = RealityKit.ModelSortGroup(depthPass: .postPass)
+    static let depthPrepassSortGroup = RealityKit.ModelSortGroup(depthPass: .prePass)
+    
 	static let debugShaderDump: Bool = {
 		let value = UserDefaults.standard.bool(forKey: "gdrk-debug-shader-dump")
 		if value {
@@ -188,10 +192,11 @@ public class SGLProgram: @unchecked Sendable {
 			return false
 		}
 	}
-	
+
 	var sgMaterial: ShaderGraphMaterial? = nil
 	var parameterBlockDescriptor: ParameterBlockDescriptor = .init()
 	var sortOrder: Int32 = 0
+    var sortGroup: ModelSortGroup? = nil
 	var transparent: Bool = false
     var billboard: Bool = false
     var boundsMultiplier: Float = 1.0
@@ -241,9 +246,9 @@ public class SGLProgram: @unchecked Sendable {
 	public func bindColorParameter(_ name: String, _ value: GDRKColorRef) -> UInt8  {
 		return bindParameter(name, .color(value))
 	}
-	public func bindTextureParameter(_ name: String, _ value: TextureResource?) -> UInt8  {
+	public func bindTextureParameter(_ name: String, _ value: TextureResource) -> UInt8  {
 		var v: MaterialParameters.Value? = nil
-		if let textureValue = value?.value {
+		if let textureValue = value.value {
 			v = .textureResource(textureValue)
 		}
 		return bindParameter(name, v)
@@ -261,10 +266,6 @@ public class SGLProgram: @unchecked Sendable {
 		sortOrder = value
 	}
 	
-	public func setTransparent(value: Bool) {
-		transparent = value
-	}
-    
     public func setBillboard(value: Bool) {
         billboard = value
     }
@@ -285,11 +286,24 @@ public class SGLProgram: @unchecked Sendable {
 			print("SGLProgram.setCullMode: Invalid cull mode specified")
 		}
 	}
+    
+    public func setSortGroup(value: Int) {
+        switch value {
+        case 0:
+            sortGroup = nil
+        case 1:
+            sortGroup = SGLProgram.transparentSortGroup
+        case 2:
+            sortGroup = SGLProgram.depthPostpassSortGroup
+        case 3:
+            sortGroup = SGLProgram.depthPrepassSortGroup
+        default:
+            print("SGLProgram.setSortGroup: Invalid sort group value")
+        }
+    }
 }
 
 public class SGLMaterial: @unchecked Sendable, ReferenceHashable {
-	static let transparentSortGroup = RealityKit.ModelSortGroup(depthPass: .postPass)
-
 	var program: SGLProgram? = nil
 	var value: ShaderGraphMaterial? = nil
 	var parameterBlock: SGLProgram.ParameterBlock?
@@ -314,11 +328,15 @@ public class SGLMaterial: @unchecked Sendable, ReferenceHashable {
 		return self.program == nil
 	}
 
+	public func isSome() -> Bool {
+		return self.value != nil
+	}
+
 	public func setWorldScale(value: Float) {
 		do {
             try self.value?.setParameter(name: "_world_scale", value: .simd3Float(SIMD3<Float>(value, value, value)))
 		} catch {
-			print("SGLMaterial.setWorldScale: Errot setting material parameter _world_scale: \(error)")
+			print("SGLMaterial.setWorldScale: Error setting material parameter _world_scale: \(error)")
 		}
 	}
 
@@ -360,11 +378,11 @@ public class SGLMaterial: @unchecked Sendable, ReferenceHashable {
         setParameter(index: index, value: .simd4Float(value.to_simd()), typeName: "Float4")
     }
 
-    public func setTexture(index: UInt8, texture: TextureResource?) {
-        guard let textureValue = texture?.value else {
+    public func setTexture(index: UInt8, texture: TextureResource) {
+        guard let textureValue = texture.value else {
             return
         }
-        
+
         setParameter(index: index, value: .textureResource(textureValue), typeName: "Texture")
     }
 

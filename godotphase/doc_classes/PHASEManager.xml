@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PHASEManager" inherits="Node" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Manages the Apple PHASE spatial audio engine.
+	</brief_description>
+	<description>
+		Singleton node that manages the lifecycle of Apple's PHASE spatial audio engine. Automatically added to the scene tree by the GodotPhase editor plugin via [code]PhaseManagerSingleton.gd[/code].
+		The PHASE engine initializes automatically when this node enters the scene tree. It updates every physics frame while running.
+		Engine-level configuration (such as [code]phase/client_rendering_mode[/code]) is read from [b]Project &gt; Project Settings[/b] at startup. Enable [b]Advanced Settings[/b] in the Project Settings dialog to browse the [code]phase[/code] category.
+		[b]Note:[/b] Only available on Apple platforms (macOS 15.0+, iOS 18.0+, visionOS 26.0+, tvOS 18.0+).
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="initialize_engine">
+			<return type="bool" />
+			<description>
+				Starts the PHASE audio engine. Called automatically when the node enters the scene tree. Returns [code]true[/code] on success. Manual calls are only needed if the engine was previously shut down with [method shutdown_engine].
+			</description>
+		</method>
+		<method name="is_client_rendering_active" qualifiers="const">
+			<return type="bool" />
+			<description>
+				[b]visionOS only.[/b] Returns [code]true[/code] if the engine was created with [code]PHASERenderingModeClient[/code]. Reflects the value resolved from [code]phase/client_rendering_mode[/code] when the engine was initialized, so it reports what [constant CLIENT_RENDERING_MODE_AUTOMATIC] actually detected.
+			</description>
+		</method>
+		<method name="is_engine_initialized" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] if the PHASE engine is currently running.
+			</description>
+		</method>
+		<method name="shutdown_engine">
+			<return type="void" />
+			<description>
+				Stops the PHASE engine and releases its resources. Also called automatically when this node is freed.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="scene_reverb_preset" type="int" setter="set_scene_reverb_preset" getter="get_scene_reverb_preset" enum="godot.GodotPHASEReverbPreset" default="1">
+			The reverb preset applied to the scene. Affects all audio sources that have reverb sends enabled. Defaults to [constant REVERB_PRESET_SMALL_ROOM].
+		</member>
+	</members>
+	<constants>
+		<constant name="REVERB_PRESET_NONE" value="0" enum="GodotPHASEReverbPreset">
+			No reverb applied.
+		</constant>
+		<constant name="REVERB_PRESET_SMALL_ROOM" value="1" enum="GodotPHASEReverbPreset">
+			Small room reverb.
+		</constant>
+		<constant name="REVERB_PRESET_MEDIUM_ROOM" value="2" enum="GodotPHASEReverbPreset">
+			Medium room reverb.
+		</constant>
+		<constant name="REVERB_PRESET_LARGE_ROOM" value="3" enum="GodotPHASEReverbPreset">
+			Large room reverb.
+		</constant>
+		<constant name="REVERB_PRESET_LARGE_ROOM_2" value="4" enum="GodotPHASEReverbPreset">
+			Large room reverb (variant 2).
+		</constant>
+		<constant name="REVERB_PRESET_MEDIUM_CHAMBER" value="5" enum="GodotPHASEReverbPreset">
+			Medium chamber reverb.
+		</constant>
+		<constant name="REVERB_PRESET_LARGE_CHAMBER" value="6" enum="GodotPHASEReverbPreset">
+			Large chamber reverb.
+		</constant>
+		<constant name="REVERB_PRESET_MEDIUM_HALL" value="7" enum="GodotPHASEReverbPreset">
+			Medium hall reverb.
+		</constant>
+		<constant name="REVERB_PRESET_MEDIUM_HALL_2" value="8" enum="GodotPHASEReverbPreset">
+			Medium hall reverb (variant 2).
+		</constant>
+		<constant name="REVERB_PRESET_MEDIUM_HALL_3" value="9" enum="GodotPHASEReverbPreset">
+			Medium hall reverb (variant 3).
+		</constant>
+		<constant name="REVERB_PRESET_LARGE_HALL" value="10" enum="GodotPHASEReverbPreset">
+			Large hall reverb.
+		</constant>
+		<constant name="REVERB_PRESET_CATHEDRAL" value="11" enum="GodotPHASEReverbPreset">
+			Cathedral reverb.
+		</constant>
+		<constant name="CLIENT_RENDERING_MODE_AUTOMATIC" value="0" enum="GodotPHASEClientRenderingMode">
+			[b]visionOS only.[/b] Use [code]PHASERenderingModeClient[/code] if GodotRealityKit is driving the scene, otherwise [code]PHASERenderingModeLocal[/code]. This is the default.
+		</constant>
+		<constant name="CLIENT_RENDERING_MODE_ENABLED" value="1" enum="GodotPHASEClientRenderingMode">
+			[b]visionOS only.[/b] Always use [code]PHASERenderingModeClient[/code].
+		</constant>
+		<constant name="CLIENT_RENDERING_MODE_DISABLED" value="2" enum="GodotPHASEClientRenderingMode">
+			[b]visionOS only.[/b] Always use [code]PHASERenderingModeLocal[/code].
+		</constant>
+	</constants>
+</class>

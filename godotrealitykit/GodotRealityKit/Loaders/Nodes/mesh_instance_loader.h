@@ -50,24 +50,27 @@ public:
 
 	void update_deps(ResourceLoaderSet &p_resource_loaders);
 
-	void update(const ResourceLoaderSet &p_resource_loaders);
+	void update_dirty_flags(const ResourceLoaderSet &p_resource_loaders);
+	void update_deps_usage(ResourceLoaderSet &p_resource_loaders) const;
 
-	void mark_frame_used(MeshLoader *p_meshes, MaterialLoader *p_materials) const;
+	void update(const ResourceLoaderSet &p_resource_loaders);
 
 protected:
 	const CameraLoader *camera_loader;
 
-private:
+protected:
 	struct alignas(8) DependencyState {
 		uint32_t mesh_hash = 0;
 		uint32_t material_hash = 0;
 		uint32_t blend_shape_hash = 0;
+		uint32_t mesh_index = 0;
 	};
 
-	MeshDependencyList mesh_deps;
-	DependencyList material_deps;
-
 	godot::LocalVector<DependencyState> dep_states;
+
+private:
+	DependencyList mesh_deps;
+	DependencyList material_deps;
 };
 
 class MeshInstanceLoader : public MeshInstanceLoaderBase<MeshInstanceLoader, godot::MeshInstance3D> {
@@ -97,6 +100,7 @@ public:
 
 	void update_visibility_state(const MeshLoader *p_mesh);
 	void on_transform_changed(uint32_t p_idx, const godot::Transform3D &transform);
+	void _on_visibility_changed(uint32_t p_idx);
 
 	struct CullingState {
 		bool transform_updated = false;
@@ -149,9 +153,9 @@ public:
 	uint32_t remove(godot::SkeletonModifier3D *p_node) { return Base::remove(p_node); }
 
 	void update_deps(ResourceLoaderSet &p_resource_loaders) {
-		MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
-		for_each_dirty([&](uint32_t p_idx) {
-			meshes->add_skeleton_modifier(nodes[p_idx]);
+		SkeletonLoader *skeletons = std::get<SkeletonLoader *>(p_resource_loaders);
+		for_each_added([&](uint32_t p_idx) {
+			skeletons->add_skeleton_modifier(nodes[p_idx]);
 		});
 	}
 };

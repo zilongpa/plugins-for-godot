@@ -140,7 +140,7 @@ DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeProximityFade);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeFloatConstant);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeIntConstant);
 DEFINE_UNSUPPORTED_NODE(VisualShaderNodeUIntConstant, "uint not supported");
-DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformConstant); 
+//DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformConstant);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeVec2Constant);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeVec3Constant);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeVec4Constant);
@@ -209,7 +209,7 @@ DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeReroute);
 // Variant Operations
 DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformCompose); 
 DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformDecompose); 
-DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformVecMult); 
+//DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeTransformVecMult);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeVectorCompose);
 //DEFINE_UNIMPLEMENTED_NODE(VisualShaderNodeVectorDecompose);
 

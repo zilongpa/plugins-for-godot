@@ -61,8 +61,11 @@ bool EnvironmentLoader::update() {
 	PROFILE_FUNC_SCOPE;
 
 	return for_each_dirty_throttled([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return LocalBitVector::IterationResult::SKIPPED;
+		}
 		const godot::RID env_rid = environments[idx].environment->get_rid();
-		ERR_FAIL_COND((!env_rid.is_valid()));
+		ERR_FAIL_COND_V((!env_rid.is_valid()), LocalBitVector::IterationResult::SKIPPED);
 
 		godot::Texture2D *panorama = nullptr;
 
@@ -110,5 +113,6 @@ bool EnvironmentLoader::update() {
 
 			CGImageRelease(cgimage);
 		}
+		return LocalBitVector::IterationResult::PROCESSED;
 	});
 }

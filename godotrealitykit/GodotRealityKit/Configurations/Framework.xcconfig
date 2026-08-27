@@ -37,5 +37,4 @@ GDRK_PLATFORM[sdk=xr*] = visionos
 GDRK_TARGET[config=Debug] = .template_debug
 GDRK_TARGET[config=Release] = .template_release
 
-LLVM_LTO[config=Release] = YES
 SWIFT_OPTIMIZATION_LEVEL[config=Debug] = -Onone

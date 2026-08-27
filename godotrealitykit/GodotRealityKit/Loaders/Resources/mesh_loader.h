@@ -17,41 +17,11 @@
 #include "resource_loader.h"
 #include "signposts.h"
 
-#include <godot_cpp/classes/skeleton_modifier3d.hpp>
 #include <godot_cpp/classes/skin.hpp>
 
 namespace gdrk {
 
-class ChangedMeshDependencyListSet : public ChangedDependencyListSet {
-public:
-	explicit ChangedMeshDependencyListSet(uint32_t p_set_size) :
-			ChangedDependencyListSet(p_set_size) {}
-
-	_FORCE_INLINE_ void add_changed_dep_instance(godot::RID p_instance_rid) {
-		changed_dep_instance_rids.push_back(p_instance_rid);
-	}
-
-private:
-	friend class MeshDependencyList;
-
-	godot::LocalVector<godot::RID> changed_dep_instance_rids;
-};
-
-class MeshDependencyList : protected DependencyList {
-public:
-	void replace_changed(const ChangedMeshDependencyListSet &p_dirty_deps, class MeshLoader *p_loader);
-
-	_FORCE_INLINE_ Span<const Dependency> get() const {
-		return DependencyList::get();
-	}
-
-	_FORCE_INLINE_ const LocalBitVector &changed() const {
-		return DependencyList::changed();
-	}
-
-private:
-	godot::LocalVector<godot::RID> dep_instance_rids;
-};
+class SkeletonLoader;
 
 // Manages mesh surface resources and drives MeshEncoder each frame.
 class MeshLoader : public ResourceLoader<MeshLoader> {
@@ -61,13 +31,16 @@ protected:
 	static void _bind_methods() {}
 
 public:
-	void initialize();
+	void initialize(SkeletonLoader *p_skeletons);
 
 	void _reserve(uint32_t p_capacity) {
 		ResourceLoader<MeshLoader>::_reserve(p_capacity);
 		meshes.resize(p_capacity);
 		mesh_rid_idxs.resize(p_capacity);
-		mesh_dirty_position_idxs.resize(p_capacity);
+		mesh_needs_reencoding.resize(p_capacity);
+		no_compact_idxs.resize(p_capacity);
+		mesh_needs_bounds_update.resize(p_capacity);
+		surface_info_dirty_idxs.resize(p_capacity);
 	}
 
 	uint32_t find_or_add(godot::RID p_mesh_rid,
@@ -77,28 +50,28 @@ public:
 
 	void remove(uint32_t p_idx);
 
-	void add_instance(uint32_t p_idx, godot::RID p_instance_rid);
-	void remove_instance(uint32_t p_idx, godot::RID p_instance_rid);
-
-	void add_skeleton_modifier(godot::SkeletonModifier3D *p_skeleton_modifier);
-
 	void set_blend_shape_weights(uint32_t p_idx, Span<const float> p_weights);
 	void set_skin(uint32_t p_idx, const godot::Ref<godot::Skin> &p_skin);
 
 	bool update(id<MTLCommandBuffer> p_command_buffer);
 
-	godot::AABB get_bounds(godot::RID p_mesh_rid, uint64_t p_instance_id, uint32_t p_surface_idx) const {
-		const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id, p_surface_idx);
-		if (!mesh) {
-			return godot::AABB();
-		}
-		return mesh->surface_infos[p_surface_idx].bounds;
+	void prepare_frame_changes();
+	godot::AABB get_aabb(godot::RID p_mesh_rid, uint64_t p_instance_id) const;
+
+	GodotRealityKit::MeshResource find_resource(godot::RID p_mesh_rid, uint64_t p_instance_id, uint32_t p_surface_idx) const;
+	GodotRealityKit::MeshResource find_compacted_resource(godot::RID p_mesh_rid, uint64_t p_instance_id) const;
+
+	bool is_compacted(godot::RID p_mesh_rid, uint64_t p_instance_id) const {
+		const Mesh *mesh = find_mesh(p_mesh_rid, p_instance_id);
+		return mesh && mesh->compacted_resource.isSome();
 	}
 
-	swift::Optional<GodotRealityKit::MeshResource> find_resource(godot::RID p_mesh_rid, uint64_t p_instance_id, uint32_t p_surface_idx) const;
+	void set_no_compact(uint32_t p_idx) {
+		no_compact_idxs.insert(p_idx);
+	}
 
-	void mark_positions_dirty(uint32_t p_idx) {
-		mesh_dirty_position_idxs.insert(p_idx);
+	void force_update(uint32_t p_idx) {
+		mesh_needs_reencoding.insert(p_idx);
 	}
 
 	void reset_dirty() {
@@ -110,26 +83,22 @@ private:
 		dirty_mesh_rid_idxs.insert(p_mesh_rid_idx);
 	}
 
-	void skeleton_pose_updated(uint64_t p_skeleton_id);
+	uint32_t get_mesh_index(godot::RID p_mesh_rid,
+			uint64_t p_instance_id) const;
 
 	inline const Mesh *find_mesh(godot::RID p_mesh_rid,
-			uint64_t p_instance_id,
-			uint32_t p_surface_idx) const {
+			uint64_t p_instance_id) const {
 		if (!p_mesh_rid.is_valid()) {
 			return nullptr;
 		}
 
-		const MeshKey key = MeshKey{
-			.mesh_rid = p_mesh_rid,
-			.instance_id = p_instance_id,
-		};
-
-		ERR_FAIL_COND_V(!mesh_to_idx.has(key), nullptr);
-		const uint32_t idx = mesh_to_idx.get(key);
+		uint32_t idx = get_mesh_index(p_mesh_rid, p_instance_id);
+		ERR_FAIL_COND_V(idx == UINT32_MAX, nullptr);
 		return &meshes[idx];
 	}
 
 	Mesh::SurfaceInfo get_surface_info(const godot::Dictionary &p_surface, godot::RID p_mesh_rid) const;
+	godot::AABB compute_local_aabb(Span<const Mesh::SurfaceInfo> p_surface_infos) const;
 	bool surface_needs_new_resource(const Mesh::SurfaceInfo &p_cur, const Mesh::SurfaceInfo &p_new) const;
 	bool bounds_changed(const godot::AABB &p_cur, const godot::AABB &p_new, float p_percent) const;
 
@@ -150,35 +119,18 @@ private:
 	};
 
 	MeshEncoder mesh_encoder;
+	SkeletonLoader *skeletons = nullptr;
 
 	RID_Associated<uint32_t> instance_rid_to_idx;
 	godot::HashMap<MeshKey, uint32_t, Hasher> mesh_to_idx;
 	godot::LocalVector<Mesh> meshes;
 	godot::LocalVector<uint32_t> mesh_rid_idxs;
-	LocalBitVector mesh_dirty_position_idxs;
-	godot::HashSet<uint64_t> dirty_skeleton_ids;
+	LocalBitVector surface_info_dirty_idxs;
 	LocalBitVector dirty_mesh_rid_idxs;
+	LocalBitVector no_compact_idxs;
+
+	LocalBitVector mesh_needs_bounds_update;
+	LocalBitVector mesh_needs_reencoding;
 };
-
-inline void MeshDependencyList::replace_changed(const ChangedMeshDependencyListSet &p_dirty_deps, MeshLoader *p_loader) {
-	godot::LocalVector<godot::RID> new_dep_instance_rids;
-	new_dep_instance_rids.reserve(uint32_t(deps.size()));
-	for (uint32_t dep_idx = 0; dep_idx < deps.size(); dep_idx++) {
-		if (!p_dirty_deps.changed_dst_idxs.has(deps[dep_idx].dst)) {
-			new_dep_instance_rids.push_back(dep_instance_rids[dep_idx]);
-		} else {
-			p_loader->remove_instance(deps[dep_idx].src, dep_instance_rids[dep_idx]);
-		}
-	}
-
-	for (uint32_t new_dep_idx = 0; new_dep_idx < p_dirty_deps.changed_dep_instance_rids.size(); new_dep_idx++) {
-		const godot::RID instance_rid = p_dirty_deps.changed_dep_instance_rids[new_dep_idx];
-		p_loader->add_instance(p_dirty_deps.changed_deps[new_dep_idx].src, instance_rid);
-		new_dep_instance_rids.push_back(instance_rid);
-	}
-
-	dep_instance_rids = std::move(new_dep_instance_rids);
-	DependencyList::replace_changed(p_dirty_deps, p_loader);
-}
 
 } //namespace gdrk

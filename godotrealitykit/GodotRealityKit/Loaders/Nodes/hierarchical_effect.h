@@ -51,6 +51,17 @@ struct IBLEffect {
 	static void update(NodeLoaders *p_nodes, GodotRealityKit::Entity p_entity, godot::RID p_new_rid);
 };
 
+// Two entities parented to root: `clipper_entity` (C) carries the ClippingComponent and a rigid
+// (rotation + translation only) transform; `anchor_entity` (A) is C's child with transform = C's
+// inverse, so reparenting content under A cancels C's transform and content keeps its correct
+// world pose while still being clipped (C.shouldClipChildren clips all of C's descendants).
+struct ClippingEffect {
+	GodotRealityKit::Entity clipper_entity = GodotRealityKit::Entity::initAndMaterialize();
+	GodotRealityKit::Entity anchor_entity = GodotRealityKit::Entity::initAndMaterialize();
+
+	static void update(NodeLoaders *p_nodes, GodotRealityKit::Entity p_entity, godot::RID p_new_rid);
+};
+
 template <template <typename> typename Value, typename... Effects>
 struct EffectSet {
 private:
@@ -136,7 +147,7 @@ private:
 
 template <typename Effect> using LocalRIDVector = godot::LocalVector<godot::RID>;
 
-using EffectRIDsSet = EffectSet<LocalRIDVector, HoverEffect, PortalEffect, PortalCrossingEffect, IBLEffect>;
-using HierarchicalEffectSet = EffectSet<HierarchicalEffect, HoverEffect, PortalEffect, PortalCrossingEffect, IBLEffect>;
+using EffectRIDsSet = EffectSet<LocalRIDVector, HoverEffect, PortalEffect, PortalCrossingEffect, IBLEffect, ClippingEffect>;
+using HierarchicalEffectSet = EffectSet<HierarchicalEffect, HoverEffect, PortalEffect, PortalCrossingEffect, IBLEffect, ClippingEffect>;
 
 } // namespace gdrk

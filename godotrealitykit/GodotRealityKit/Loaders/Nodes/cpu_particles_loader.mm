@@ -24,7 +24,7 @@ void CPUParticlesLoader::update_deps(
 
 	Base::update_deps(p_resource_loaders);
 
-	ChangedMeshDependencyListSet changed_mesh_deps = ChangedMeshDependencyListSet(get_capacity());
+	ChangedDependencyListSet changed_mesh_deps = ChangedDependencyListSet(get_capacity());
 	ChangedDependencyListSet changed_multimesh_deps = ChangedDependencyListSet(get_capacity());
 	ChangedDependencyListSet changed_material_deps = ChangedDependencyListSet(get_capacity());
 	for_each_removed([&](uint32_t idx) {
@@ -53,14 +53,10 @@ void CPUParticlesLoader::update_deps(
 	material_deps.replace_changed(changed_material_deps, materials);
 }
 
-void CPUParticlesLoader::update(const ResourceLoaderSet &p_resource_loaders) {
-	PROFILE_FUNC_SCOPE;
-
-	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
-	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
-	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
-
-	Base::update(p_resource_loaders);
+void CPUParticlesLoader::update_dirty_flags(const ResourceLoaderSet &p_resource_loaders) {
+	const MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	const MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	const MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
 
 	dirty_idxs.merge(mesh_deps.changed());
 	if (meshes->has_dirty()) {
@@ -88,14 +84,45 @@ void CPUParticlesLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 			}
 		}
 	}
+}
+
+void CPUParticlesLoader::update_deps_usage(ResourceLoaderSet &p_resource_loaders) const {
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	for (Dependency dep : mesh_deps.get()) {
+		if (is_valid(dep.dst)) {
+			meshes->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : multimesh_deps.get()) {
+		if (is_valid(dep.dst)) {
+			multimeshes->mark_used_in_frame(dep.src);
+		}
+	}
+	for (Dependency dep : material_deps.get()) {
+		if (is_valid(dep.dst)) {
+			materials->mark_used_in_frame(dep.src);
+		}
+	}
+}
+
+void CPUParticlesLoader::update(const ResourceLoaderSet &p_resource_loaders) {
+	PROFILE_FUNC_SCOPE;
+
+	MeshLoader *meshes = std::get<MeshLoader *>(p_resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(p_resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(p_resource_loaders);
+
+	Base::update(p_resource_loaders);
 
 	for_each_dirty([&](uint32_t idx) {
 		godot::CPUParticles3D *node = nodes[idx];
 		ERR_FAIL_NULL(node);
 
 		node_entities[idx].entity.clearChildren();
-		for (uint32_t surface_idx = 0; surface_idx < mesh_get_surface_count(node); surface_idx++) {
-			GodotRealityKit::Entity child = mesh_surface_to_entity(node, surface_idx, meshes, materials, multimeshes);
+		for (GodotRealityKit::Entity child : node_to_entities(node, meshes, materials, multimeshes)) {
 			node_entities[idx].entity.addChild(child);
 		}
 	});

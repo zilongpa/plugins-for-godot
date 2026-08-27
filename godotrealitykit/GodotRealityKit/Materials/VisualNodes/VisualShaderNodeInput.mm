@@ -153,6 +153,14 @@ STATIC_INIT({
 			  VERTEX_DECLARATION(UV, PortType::VEC2F, sgl::builtin::vertex::uv0());
 			  VERTEX_DECLARATION(UV2, PortType::VEC2F, sgl::builtin::vertex::uv1());
 
+			  // Transform builtins
+			  VERTEX_DECLARATION(MODEL_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_geometry_modifier_model_to_world()");
+			  VERTEX_DECLARATION(MODELVIEW_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_geometry_modifier_model_to_view()");
+			  VERTEX_DECLARATION(INV_MODELVIEW_MATRIX, PortType::TRANSFORM3D, "ND_invertmatrix_matrix44(ND_realitykit_geometry_modifier_model_to_view())");
+			  VERTEX_DECLARATION(VIEW_MATRIX, PortType::TRANSFORM3D, "ND_multiply_matrix44(ND_realitykit_geometry_modifier_model_to_view(), ND_realitykit_geometry_modifier_world_to_model())");
+			  VERTEX_DECLARATION(PROJECTION_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_geometry_modifier_view_to_projection()");
+			  VERTEX_DECLARATION(INV_PROJECTION_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_geometry_modifier_projection_to_view()");
+
 			  // TODO
 			  VERTEX_DECLARATION(CAMERA_DIRECTION_WORLD, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(CAMERA_POSITION_WORLD, PortType::UNDEFINED, "1.0f");
@@ -166,19 +174,13 @@ STATIC_INIT({
 			  VERTEX_DECLARATION(EYE_OFFSET, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(INSTANCE_CUSTOM, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(INSTANCE_ID, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(INV_PROJECTION_MATRIX, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(INV_MODELVIEW_MATRIX, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(MODEL_MATRIX, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(MODELVIEW_MATRIX, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(NODE_POSITION_VIEW, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(NODE_POSITION_WORLD, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(OUTPUT_IS_SRGB, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(POINT_SIZE, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(PROJECTION_MATRIX, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(ROUGHNESS, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(VERTEX_ID, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(VIEW_INDEX, PortType::UNDEFINED, "1.0f");
-			  VERTEX_DECLARATION(VIEW_MATRIX, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(VIEW_MONO_LEFT, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(VIEW_RIGHT, PortType::UNDEFINED, "1.0f");
 			  VERTEX_DECLARATION(VIEWPORT_SIZE, PortType::UNDEFINED, "1.0f");
@@ -200,6 +202,15 @@ STATIC_INIT({
 			  FRAGMENT_DECLARATION(UV2, PortType::VEC2F, sgl::builtin::fragment::uv1())
 			  FRAGMENT_DECLARATION(VIEW, PortType::VEC3F, sgl::builtin::fragment::view_vector());
 
+			  // Transform builtins
+			  FRAGMENT_DECLARATION(MODEL_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_surface_model_to_world()");
+			  FRAGMENT_DECLARATION(INV_MODELVIEW_MATRIX, PortType::TRANSFORM3D, "ND_invertmatrix_matrix44(ND_realitykit_surface_model_to_view())");
+			  FRAGMENT_DECLARATION(VIEW_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_surface_world_to_view()");
+			  FRAGMENT_DECLARATION(PROJECTION_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_surface_view_to_projection()");
+			  FRAGMENT_DECLARATION(INV_PROJECTION_MATRIX, PortType::TRANSFORM3D, "ND_realitykit_surface_projection_to_view()");
+
+			  FRAGMENT_DECLARATION(CAMERA_FRONT_FACING, PortType::BOOL, "ND_realitykit_is_front_facing()");
+
 			  // TODO
 			  FRAGMENT_DECLARATION(CAMERA_DIRECTION_WORLD, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(CAMERA_POSITION_WORLD, PortType::UNDEFINED, "1.0f");
@@ -207,18 +218,12 @@ STATIC_INIT({
 			  FRAGMENT_DECLARATION(EXPOSURE, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(EYE_OFFSET, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(FRAGCOORD, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(CAMERA_FRONT_FACING, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(INV_PROJECTION_MATRIX, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(INV_MODELVIEW_MATRIX, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(MODEL_MATRIX, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(NODE_POSITION_VIEW, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(NODE_POSITION_WORLD, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(OUTPUT_IS_SRGB, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(POINT_COORD, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(PROJECTION_MATRIX, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(SCREEN_UV, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(VIEW_INDEX, PortType::UNDEFINED, "1.0f");
-			  FRAGMENT_DECLARATION(VIEW_MATRIX, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(VIEW_MONO_LEFT, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(VIEW_RIGHT, PortType::UNDEFINED, "1.0f");
 			  FRAGMENT_DECLARATION(VIEWPORT_SIZE, PortType::UNDEFINED, "1.0f");
@@ -302,19 +307,5 @@ STATIC_INIT({
 		InputInfo &input_info = p_node_wrapper.custom_data.get<InputInfo>();
 		
 		OUTPUT_EXPRESSION(0, std::format("{}()", InputInfo::get_expression(p_node_wrapper.shader_type, input_info.input)));
-
-		if (InputInfo::get_type(p_node_wrapper.shader_type, input_info.input, 0) == PortType::VEC2F) {
-			OUTPUT_EXPRESSION(1, std::format("v2_x({})", var_name));
-			OUTPUT_EXPRESSION(2, std::format("v2_y({})", var_name));
-		} else if (InputInfo::get_type(p_node_wrapper.shader_type, input_info.input, 0) == PortType::VEC3F) {
-			OUTPUT_EXPRESSION(1, std::format("v3_x({})", var_name));
-			OUTPUT_EXPRESSION(2, std::format("v3_y({})", var_name));
-			OUTPUT_EXPRESSION(3, std::format("v3_z({})", var_name));
-		} else if (InputInfo::get_type(p_node_wrapper.shader_type, input_info.input, 0) == PortType::VEC4F) {
-			OUTPUT_EXPRESSION(1, std::format("v4_x({})", var_name));
-			OUTPUT_EXPRESSION(2, std::format("v4_y({})", var_name));
-			OUTPUT_EXPRESSION(3, std::format("v4_z({})", var_name));
-			OUTPUT_EXPRESSION(4, std::format("v4_w({})", var_name));
-		}
 	}
 END(VisualShaderNodeInput)

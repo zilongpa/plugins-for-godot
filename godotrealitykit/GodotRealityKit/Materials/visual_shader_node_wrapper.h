@@ -289,8 +289,13 @@ public:
 	std::string get_tmp_var_name(uint32_t p_custom_id = 0) const;
 	const VisualShaderNodeWrapper *get_input_node(const VisualProgramBuilderContext &p_context, uint32_t p_input_index) const;
 
+	std::string cast_expression(VisualProgramBuilderContext &p_context, InputExpression &p_expression, uint32_t p_input_index) const;
 	std::string get_input_expression(VisualProgramBuilderContext &p_context,
 			uint32_t p_input_index,
+			bool &p_was_default = VisualShaderNodeWrapper::unused_default) const;
+	std::string get_input_expression(VisualProgramBuilderContext &p_context,
+			uint32_t p_input_index,
+			const char *default_value,
 			bool &p_was_default = VisualShaderNodeWrapper::unused_default) const;
 
 	void fill_swizzle_outputs(VisualProgramBuilderContext &p_context, const char *p_var_name = nullptr) const;

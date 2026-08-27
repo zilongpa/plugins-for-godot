@@ -266,6 +266,6 @@ struct UniformDescriptor {
 
 using OptionalUniformDescriptor = std::optional<UniformDescriptor>;
 
-void update_material_parameter(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, const TextureLoader &p_textures);
+void update_material_parameter(int p_index, const UniformDescriptor &p_uniform, GodotRealityKit::SGLMaterial &p_sgl_material, godot::Variant &p_value, TextureLoader &p_textures);
 
 } //namespace gdrk

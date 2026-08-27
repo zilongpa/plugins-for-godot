@@ -44,6 +44,14 @@ public func errPrint(msg: String) {
     }
 }
 
+public func warnPrint(msg: String) {
+    MainActor.assumeIsolated{
+        msg.withCString{ cStringMsg in
+            Bridge.delegate?.printWarning(cStringMsg)
+        }
+    }
+}
+
 internal enum GenericError: Swift.Error, LocalizedError {
     case value(String)
 
@@ -165,6 +173,14 @@ public func isSceneVisible() -> Bool {
     MainActor.assumeIsolated{ Bridge.sceneVisible }
 }
 
+public func hasOriginalScene() -> Bool {
+#if os(macOS)
+    return false
+#else
+    return MainActor.assumeIsolated{ Bridge.originalScene != nil }
+#endif
+}
+
 public func startBlockingAsyncTask() {
 	MainActor.assumeIsolated{ Bridge.blockingAsyncTaskCount += 1 }
 }
@@ -221,7 +237,6 @@ func withBlockingAsyncTaskScope(body: @escaping @MainActor () async -> Void) {
 	}
 }
 
-
 public struct MeshResource: @unchecked Sendable {
     let value: RealityKit.MeshResource?
     let flags: VertexBufferFlags
@@ -236,7 +251,11 @@ public struct MeshResource: @unchecked Sendable {
         self.boundsMax = .init(0, 0, 0)
         self.uvScale = .init(0, 0, 0, 0)
     }
-    
+
+    public func isSome() -> Bool {
+        return value != nil
+    }
+
     public init?(from lowLevelMesh: LowLevelMesh,
                  withBoundsMin boundsMin: Vector3,
                  withBoundsMax boundsMax: Vector3,
@@ -288,12 +307,16 @@ public struct MeshResource: @unchecked Sendable {
 public struct TextureResource: @unchecked Sendable {
     let value: RealityKit.TextureResource?
     let lowLevelValue: RealityKit.LowLevelTexture?
-    
+
     public init() {
         self.value = nil
         self.lowLevelValue = nil
     }
-    
+
+    public func isSome() -> Bool {
+        return value != nil
+    }
+
     public init?(from lowLevelTexture: LowLevelTexture) {
         let value: RealityKit.TextureResource? = MainActor.assumeIsolated {
             do {
@@ -335,6 +358,11 @@ public struct Skybox: @unchecked Sendable {
         self.value = .none
     }
 
+    public func isSome() -> Bool {
+        if case .none = value { return false }
+        return true
+    }
+
     public static func fromCGImage(_ cgimage: CGImage) -> Skybox {
         let value = MainActor.assumeIsolated {
             return try! RealityKit.TextureResource(image: cgimage, options: .init(semantic: .hdrColor))
@@ -353,11 +381,15 @@ public struct Skybox: @unchecked Sendable {
 
 public struct ShapeResource: @unchecked Sendable {
     let value: RealityKit.ShapeResource?
-    
+
     public init() {
         self.value = nil
     }
-    
+
+    public func isSome() -> Bool {
+        return value != nil
+    }
+
     init(value: RealityKit.ShapeResource?) {
         self.value = value
     }
@@ -654,11 +686,15 @@ public struct LowLevelTexture: @unchecked Sendable {
 @available(macOS 26.0, visionOS 26.0, *)
 public struct LowLevelInstanceData: @unchecked Sendable {
     let value: RealityKit.LowLevelInstanceData?
-    
+
     public init() {
         self.value = nil
     }
-    
+
+    public func isSome() -> Bool {
+        return value != nil
+    }
+
     public init(instanceCount: Int) {
         self.value = assumeMainActor{
             return try? RealityKit.LowLevelInstanceData(instanceCount: instanceCount)
@@ -701,7 +737,9 @@ public struct DebugComponent: Component, Codable {
 
 public struct Entity: @unchecked Sendable {
     var value: RealityKit.Entity! = nil
-    
+
+    @MainActor static var didWarnClippingComponentUnavailable = false
+
     public func id() -> UInt64 {
         MainActor.assumeIsolated{
             self.value.id
@@ -782,10 +820,10 @@ public struct Entity: @unchecked Sendable {
 		return invalidMaterial
 	}()
 
-    public func setModel(mesh: MeshResource, materials: [SGLMaterial?]) {
+    public func setModel(mesh: MeshResource, materials: [SGLMaterial]) {
         MainActor.assumeIsolated{
             let modelMaterials = materials.enumerated().map{ materialIndex, material in
-                if let material = material {
+                if material.isSome() {
                     let hasCompressedUVs = mesh.flags.contains(.hasCompressedUVs)
 
                     var modelMaterialParameters = [(name: String, value: MaterialParameters.Value)]()
@@ -853,9 +891,9 @@ public struct Entity: @unchecked Sendable {
                 self.value.components[ModelComponent.self] = nil
             }
             
-            if let material = materials.first, let materialProgram = material?.program, materialProgram.transparent {
+            if let material = materials.first, let materialProgram = material.program, let sortGroup = materialProgram.sortGroup {
                 self.value.components[ModelSortGroupComponent.self] =
-                    ModelSortGroupComponent(group: SGLMaterial.transparentSortGroup, order: materialProgram.sortOrder)
+                    ModelSortGroupComponent(group: sortGroup, order: materialProgram.sortOrder)
             }
         }
     }
@@ -871,9 +909,9 @@ public struct Entity: @unchecked Sendable {
     }
     
     @available(macOS 26.0, visionOS 26.0, *)
-    public func setInstanceData(instanceData: LowLevelInstanceData?) {
+    public func setInstanceData(instanceData: LowLevelInstanceData) {
         MainActor.assumeIsolated{
-            if let instanceDataValue = instanceData?.value {
+            if let instanceDataValue = instanceData.value {
                 var meshInstancesComponent = MeshInstancesComponent()
                 meshInstancesComponent[partIndex: 0] = .init(data: instanceDataValue)
                 self.value.components[MeshInstancesComponent.self] = meshInstancesComponent
@@ -902,6 +940,9 @@ public struct Entity: @unchecked Sendable {
         MainActor.assumeIsolated{
             if value {
                 self.value.components.set(InputTargetComponent())
+                #if !os(macOS)
+                ImmersiveRealityViewState.shared.hasInputTargets = true
+                #endif
             } else {
                 self.value.components.remove(InputTargetComponent.self)
             }
@@ -910,7 +951,8 @@ public struct Entity: @unchecked Sendable {
     
     public mutating func setHoverEffect(groupID: HoverEffectGroupID?, color: GDRKColorRef?, strength: Float, spotlight: Bool) {
         MainActor.assumeIsolated{
-            if let groupIDValue = groupID?.value {                let hoverEffect: HoverEffectComponent.HoverEffect
+            if let groupIDValue = groupID?.value {
+                let hoverEffect: HoverEffectComponent.HoverEffect
                 if spotlight {
                     // SpotlightHoverEffectStyle's nil-color default produces no
                     // visible spotlight on dark surfaces, so fall back to white
@@ -1110,9 +1152,9 @@ public struct Entity: @unchecked Sendable {
         }
     }
 
-    public func setImageBasedLight(_ env: EnvironmentResource?, intensityExponent: Float) {
+    public func setImageBasedLight(_ env: EnvironmentResource, intensityExponent: Float) {
         MainActor.assumeIsolated {
-            guard let env = env?.value else {
+            guard let env = env.value else {
                 self.value.components.remove(VirtualEnvironmentProbeComponent.self)
                 return
             }
@@ -1231,6 +1273,33 @@ public struct Entity: @unchecked Sendable {
                     child.components.remove(PortalCrossingComponent.self)
                 }
             }
+        }
+    }
+
+    // ClippingComponent/BoundingBox require macOS/visionOS 27.0, above this plugin's 26.0
+    // deployment target, and this is called unconditionally from C++ with no availability
+    // checking. Guard at runtime so pre-27.0 devices no-op (unclipped) instead of trapping.
+    public func setClippingComponent(boundsMin: Vector3, boundsMax: Vector3, featherEnabled: Bool, featherInset: Vector3, falloff: UInt32) {
+        guard #available(macOS 27.0, visionOS 27.0, *) else {
+            MainActor.assumeIsolated {
+                if !Entity.didWarnClippingComponentUnavailable {
+                    Entity.didWarnClippingComponentUnavailable = true
+                    warnPrint(msg: "RealityClipping3D requires macOS/visionOS 27.0+; ClippingComponent is unavailable on this OS version, so this node will have no effect.")
+                }
+            }
+            return
+        }
+        MainActor.assumeIsolated{
+            var component = ClippingComponent(bounds: BoundingBox(min: boundsMin.to_simd(), max: boundsMax.to_simd()))
+            if featherEnabled {
+                let componentFalloff: ClippingComponent.FeatheredEdge.Falloff = falloff == 1 ? .cubic : .linear
+                component.featheredEdge = ClippingComponent.FeatheredEdge(symmetricEdgeInset: featherInset.to_simd(), falloff: componentFalloff)
+            } else {
+                component.featheredEdge = .none
+            }
+            component.shouldClipChildren = true
+            component.shouldClipSelf = false
+            self.value.components.set(component)
         }
     }
     

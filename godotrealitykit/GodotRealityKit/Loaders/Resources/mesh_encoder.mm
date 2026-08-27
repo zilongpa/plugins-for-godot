@@ -13,6 +13,7 @@
 //  GodotRealityKit
 
 #include "mesh_loader.h"
+#include "skeleton_loader.h"
 #include "utility.h"
 
 using namespace gdrk;
@@ -77,7 +78,25 @@ void fill_index_buffer(void *p_dst, const void *p_src, uint32_t p_index_count) {
 	}
 }
 
-void upload_bone_transforms(Mesh &p_mesh) {
+// Compacted writes always emit uint32 indices (the LowLevelMesh is created
+// with isIndex16=false). When the source surface stored 16-bit indices,
+// upcast inline. `p_start_index` is added to every index value to translate
+// from per-surface vertex space into the shared compacted vertex buffer.
+template <typename SrcIndexT>
+void fill_index_buffer_compacted(uint32_t *p_dst, const void *p_src, uint32_t p_index_count, uint32_t p_start_index) {
+	if (p_src) {
+		const SrcIndexT *src = static_cast<const SrcIndexT *>(p_src);
+		for (uint32_t i = 0; i < p_index_count; i++) {
+			p_dst[i] = uint32_t(src[winding_swap(i)]) + p_start_index;
+		}
+	} else {
+		for (uint32_t i = 0; i < p_index_count; i++) {
+			p_dst[i] = winding_swap(i) + p_start_index;
+		}
+	}
+}
+
+void upload_bone_transforms(Mesh &p_mesh, SkeletonLoader *p_skeletons) {
 	godot::Object *obj = godot::ObjectDB::get_instance(p_mesh.skeleton_id);
 	godot::Skeleton3D *skeleton = godot::Object::cast_to<godot::Skeleton3D>(obj);
 	ERR_FAIL_NULL(skeleton);
@@ -88,10 +107,10 @@ void upload_bone_transforms(Mesh &p_mesh) {
 		return;
 	}
 
-	// Use the snapshot if available (populated during skeleton_pose_updated before
-	// Skeleton3D restores pre-modifier state). Fall back to get_bone_global_pose
-	// on the first frame before any signal has fired.
-	const godot::LocalVector<godot::Transform3D> &snapshot = p_mesh.bone_pose_snapshot;
+	// Use the snapshot if available (populated by SkeletonLoader before Skeleton3D
+	// restores pre-modifier state). Fall back to get_bone_global_pose on the first
+	// frame before any signal has fired.
+	const godot::LocalVector<godot::Transform3D> &snapshot = p_skeletons->get_bone_pose_snapshot(p_mesh.skeleton_idx);
 	const bool use_snapshot = int32_t(snapshot.size()) == bone_count;
 
 	const bool has_skin = p_mesh.skin.is_valid() && p_mesh.skin->get_bind_count() > 0;
@@ -147,7 +166,7 @@ godot::StringName &attribute_data_key() {
 
 // Computes run_deform, uploads bone transforms and blend shape weights.
 // Called once per deform surface — uploads are cheap (caching + small memcpy).
-static bool prepare_deform(Mesh &p_mesh, bool &out_has_skinning) {
+static bool prepare_deform(Mesh &p_mesh, bool &out_has_skinning, SkeletonLoader *p_skeletons) {
 	out_has_skinning = p_mesh.skeleton_id != 0;
 	bool run_deform = false;
 	if (out_has_skinning) {
@@ -168,7 +187,7 @@ static bool prepare_deform(Mesh &p_mesh, bool &out_has_skinning) {
 	}
 	if (run_deform) {
 		if (out_has_skinning) {
-			upload_bone_transforms(p_mesh);
+			upload_bone_transforms(p_mesh, p_skeletons);
 		}
 		if (!p_mesh.blend_shape_weights.is_empty()) {
 			const NSUInteger byte_length = p_mesh.blend_shape_weights.size() * sizeof(float);
@@ -219,8 +238,9 @@ void MeshEncoder::initialize() {
 	ERR_FAIL_COND_MSG(_attribute_decompress_pso == nil, "Failed to create decompressAttributes pipeline state");
 }
 
-void MeshEncoder::start(id<MTLCommandBuffer> p_command_buffer) {
+void MeshEncoder::start(id<MTLCommandBuffer> p_command_buffer, SkeletonLoader *p_skeletons) {
 	_command_buffer = p_command_buffer;
+	_skeletons = p_skeletons;
 	_deform_ops.clear();
 	_decompress_ops.clear();
 	_blit_ops.clear();
@@ -230,6 +250,34 @@ void MeshEncoder::prepare(Mesh &p_mesh) {
 	static godot::StringName index_data_key_str("index_data");
 	static godot::StringName skin_data_key_str("skin_data");
 	static godot::StringName blend_shape_data_key_str("blend_shape_data");
+
+	if (p_mesh.compacted_resource.isSome()) {
+		auto llm = p_mesh.compacted_resource.lowLevelMesh();
+		ERR_FAIL_COND(llm.isNone());
+
+		id<MTLBuffer> dst_index = llm.get().replaceIndices(_command_buffer);
+		uint32_t *dst32 = static_cast<uint32_t *>(dst_index.contents);
+		uint32_t accumulated_vertex_count = 0;
+		uint32_t accumulated_index_count = 0;
+		for (uint32_t i = 0; i < p_mesh.surfaces.size(); i++) {
+			const Mesh::SurfaceInfo &info = p_mesh.surface_infos[i];
+			Mesh::Surface &surface = p_mesh.surfaces[i];
+			const bool src_is_index_16 = info.vertex_count <= 65536 && info.vertex_count > 0;
+			const void *src = surface.surface_data.has(index_data_key_str)
+					? ((const godot::PackedByteArray &)surface.surface_data[index_data_key_str]).ptr()
+					: nullptr;
+			uint32_t *dst_for_surface = dst32 + accumulated_index_count;
+			if (src_is_index_16) {
+				fill_index_buffer_compacted<uint16_t>(dst_for_surface, src, info.index_count, accumulated_vertex_count);
+			} else {
+				fill_index_buffer_compacted<uint32_t>(dst_for_surface, src, info.index_count, accumulated_vertex_count);
+			}
+			accumulated_vertex_count += info.vertex_count;
+			accumulated_index_count += info.index_count;
+		}
+		// Compaction is only enabled for static meshes — no deform staging buffers needed.
+		return;
+	}
 
 	for (uint32_t i = 0; i < p_mesh.surfaces.size(); i++) {
 		Mesh::Surface &surface = p_mesh.surfaces[i];
@@ -257,9 +305,95 @@ void MeshEncoder::prepare(Mesh &p_mesh) {
 	}
 }
 
-void MeshEncoder::encode(Mesh &p_mesh) {
+void MeshEncoder::encode_positions(Mesh &p_mesh) {
+	if (p_mesh.compacted_resource.isSome()) {
+		auto llm = p_mesh.compacted_resource.lowLevelMesh();
+		ERR_FAIL_COND(llm.isNone());
+
+		const uint32_t surface_count = p_mesh.surfaces.size();
+		const GDRKVertexBufferFormat &fmt = p_mesh.surface_infos[0].vertex_buffer_format;
+		const uint32_t vertex_stride = fmt.vertex_stride;
+		const uint32_t normal_tangent_stride = fmt.normal_tangent_stride;
+
+		uint32_t total_vertex_count = 0;
+		for (uint32_t s = 0; s < surface_count; s++) {
+			total_vertex_count += p_mesh.surface_infos[s].vertex_count;
+		}
+		const uint32_t total_position_size = total_vertex_count * vertex_stride;
+
+		id<MTLBuffer> dst_vertex = llm.get().replace(_command_buffer);
+
+		uint32_t accumulated_vertex_count = 0;
+		for (uint32_t i = 0; i < surface_count; i++) {
+			const Mesh::SurfaceInfo &info = p_mesh.surface_infos[i];
+			Mesh::Surface &surface = p_mesh.surfaces[i];
+
+			const godot::PackedByteArray vertex_data = surface.surface_data.get(vertex_data_key(), {});
+			if (!vertex_data.is_empty()) {
+				id<MTLBuffer> vsrc = make_staging_buffer(vertex_data);
+
+				const uint32_t position_size = info.vertex_count * vertex_stride;
+				const uint32_t dst_position_offset = accumulated_vertex_count * vertex_stride;
+				_blit_ops.push_back({ vsrc, dst_vertex, position_size, 0, dst_position_offset });
+
+				if (normal_tangent_stride > 0) {
+					const uint32_t src_nt_offset = info.vertex_count * vertex_stride;
+					const uint32_t nt_size = info.vertex_count * normal_tangent_stride;
+					const uint32_t dst_nt_offset = total_position_size + accumulated_vertex_count * normal_tangent_stride;
+					_blit_ops.push_back({ vsrc, dst_vertex, nt_size, src_nt_offset, dst_nt_offset });
+				}
+			}
+
+			accumulated_vertex_count += info.vertex_count;
+		}
+		return;
+	}
+
 	for (uint32_t i = 0; i < p_mesh.surfaces.size(); i++) {
-		(this->*encode_table[p_mesh.surfaces[i].encoding_mode])(p_mesh, i);
+		const uint8_t position_variant = p_mesh.surfaces[i].encoding_mode & (ENCODING_MODE_FLAG_DEFORM | ENCODING_MODE_FLAG_COMPRESSED);
+		(this->*position_encode_table[position_variant])(p_mesh, i);
+	}
+}
+
+void MeshEncoder::encode_attributes(Mesh &p_mesh) {
+	if (p_mesh.compacted_resource.isSome()) {
+		auto llm = p_mesh.compacted_resource.lowLevelMesh();
+		ERR_FAIL_COND(llm.isNone());
+
+		const bool has_attributes = (p_mesh.surface_infos[0].vertex_buffer_flags &
+											(GodotRealityKit::VertexBufferFlags::getHasColor().getRawValue() |
+													GodotRealityKit::VertexBufferFlags::getHasUV1().getRawValue() |
+													GodotRealityKit::VertexBufferFlags::getHasUV2().getRawValue())) != 0;
+		if (!has_attributes) {
+			return;
+		}
+
+		const uint32_t attribute_stride = p_mesh.surface_infos[0].vertex_buffer_format.attribute_stride;
+		id<MTLBuffer> dst_attr = llm.get().replaceAttributes(_command_buffer);
+		ERR_FAIL_COND(dst_attr == nil);
+
+		uint32_t accumulated_vertex_count = 0;
+		for (uint32_t i = 0; i < p_mesh.surfaces.size(); i++) {
+			const Mesh::SurfaceInfo &info = p_mesh.surface_infos[i];
+			Mesh::Surface &surface = p_mesh.surfaces[i];
+
+			const godot::PackedByteArray attribute_data = surface.surface_data.get(attribute_data_key(), {});
+			if (!attribute_data.is_empty()) {
+				id<MTLBuffer> asrc = make_staging_buffer(attribute_data);
+				const uint32_t attr_size = info.vertex_count * attribute_stride;
+				const uint32_t dst_attr_offset = accumulated_vertex_count * attribute_stride;
+				_blit_ops.push_back({ asrc, dst_attr, attr_size, 0, dst_attr_offset });
+			}
+
+			accumulated_vertex_count += info.vertex_count;
+		}
+		return;
+	}
+
+	for (uint32_t i = 0; i < p_mesh.surfaces.size(); i++) {
+		if (p_mesh.surfaces[i].encoding_mode & ENCODING_MODE_FLAG_WITH_UV) {
+			_encode_attributes_surface(p_mesh, i);
+		}
 	}
 }
 
@@ -267,7 +401,7 @@ void MeshEncoder::commit() {
 	if (!_blit_ops.is_empty()) {
 		id<MTLBlitCommandEncoder> blit_encoder = [_command_buffer blitCommandEncoder];
 		for (const BlitOp &op : _blit_ops) {
-			[blit_encoder copyFromBuffer:op.src sourceOffset:0 toBuffer:op.dst destinationOffset:0 size:op.size];
+			[blit_encoder copyFromBuffer:op.src sourceOffset:op.src_offset toBuffer:op.dst destinationOffset:op.dst_offset size:op.size];
 		}
 		[blit_encoder endEncoding];
 	}
@@ -428,23 +562,20 @@ DecompressOp make_attribute_decompress_op(id<MTLBuffer> p_src, id<MTLBuffer> p_d
 } //namespace
 
 // ---------------------------------------------------------------------------
-// Static dispatch table — indexed directly by EncodingMode (0-7).
+// Position dispatch table — indexed by (encoding_mode & (DEFORM|COMPRESSED)).
+// WITH_UV doesn't affect position encoding, so it's masked off before indexing.
 
-const MeshEncoder::EncodeFn MeshEncoder::encode_table[8] = {
-	&MeshEncoder::_encode_static_no_uv, // 0b000
-	&MeshEncoder::_encode_deform_no_uv, // 0b001
-	&MeshEncoder::_encode_static_compressed_no_uv, // 0b010
-	&MeshEncoder::_encode_deform_compressed_no_uv, // 0b011
-	&MeshEncoder::_encode_static_with_uv, // 0b100
-	&MeshEncoder::_encode_deform_with_uv, // 0b101
-	&MeshEncoder::_encode_static_compressed_with_uv, // 0b110
-	&MeshEncoder::_encode_deform_compressed_with_uv, // 0b111
+const MeshEncoder::EncodeFn MeshEncoder::position_encode_table[4] = {
+	&MeshEncoder::_encode_static_pos, // 0b00
+	&MeshEncoder::_encode_deform_pos, // 0b01
+	&MeshEncoder::_encode_static_compressed_pos, // 0b10
+	&MeshEncoder::_encode_deform_compressed_pos, // 0b11
 };
 
 // ---------------------------------------------------------------------------
-// 8 encode methods — one per bit combination. Each is unconditional.
+// Position encoding — one method per (deform x compressed) combination.
 
-void MeshEncoder::_encode_static_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
+void MeshEncoder::_encode_static_pos(Mesh &p_mesh, uint32_t surface_idx) {
 	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
 	auto llm = surface.resource.lowLevelMesh();
 	ERR_FAIL_COND(llm.isNone());
@@ -458,27 +589,7 @@ void MeshEncoder::_encode_static_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
 	_blit_ops.push_back({ staging, dst, staging.length });
 }
 
-void MeshEncoder::_encode_static_with_uv(Mesh &p_mesh, uint32_t surface_idx) {
-	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
-	auto llm = surface.resource.lowLevelMesh();
-	ERR_FAIL_COND(llm.isNone());
-
-	const godot::PackedByteArray vertex_data = surface.surface_data.get(vertex_data_key(), {});
-	if (vertex_data.is_empty()) {
-		return;
-	}
-	id<MTLBuffer> vsrc = make_staging_buffer(vertex_data);
-	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
-	_blit_ops.push_back({ vsrc, dst, vsrc.length });
-
-	const godot::PackedByteArray attribute_data = surface.surface_data.get(attribute_data_key(), {});
-	id<MTLBuffer> asrc = make_staging_buffer(attribute_data);
-	id<MTLBuffer> dst_attr = llm.get().replaceAttributes(_command_buffer);
-	ERR_FAIL_COND(asrc == nil || dst_attr == nil);
-	_blit_ops.push_back({ asrc, dst_attr, asrc.length });
-}
-
-void MeshEncoder::_encode_static_compressed_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
+void MeshEncoder::_encode_static_compressed_pos(Mesh &p_mesh, uint32_t surface_idx) {
 	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
 	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
 	auto llm = surface.resource.lowLevelMesh();
@@ -493,35 +604,14 @@ void MeshEncoder::_encode_static_compressed_no_uv(Mesh &p_mesh, uint32_t surface
 	_decompress_ops.push_back(make_vertex_decompress_op(src, dst, info));
 }
 
-void MeshEncoder::_encode_static_compressed_with_uv(Mesh &p_mesh, uint32_t surface_idx) {
-	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
-	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
-	auto llm = surface.resource.lowLevelMesh();
-	ERR_FAIL_COND(llm.isNone());
-
-	const godot::PackedByteArray vertex_data = surface.surface_data.get(vertex_data_key(), {});
-	id<MTLBuffer> vsrc = make_staging_buffer(vertex_data);
-	if (vsrc == nil) {
-		return;
-	}
-	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
-	_decompress_ops.push_back(make_vertex_decompress_op(vsrc, dst, info));
-
-	const godot::PackedByteArray attribute_data = surface.surface_data.get(attribute_data_key(), {});
-	id<MTLBuffer> asrc = make_staging_buffer(attribute_data);
-	id<MTLBuffer> dst_attr = llm.get().replaceAttributes(_command_buffer);
-	ERR_FAIL_COND(asrc == nil || dst_attr == nil);
-	_decompress_ops.push_back(make_attribute_decompress_op(asrc, dst_attr, info));
-}
-
-void MeshEncoder::_encode_deform_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
+void MeshEncoder::_encode_deform_pos(Mesh &p_mesh, uint32_t surface_idx) {
 	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
 	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
 	auto llm = surface.resource.lowLevelMesh();
 	ERR_FAIL_COND(llm.isNone());
 
 	bool has_skinning;
-	const bool run_deform = prepare_deform(p_mesh, has_skinning);
+	const bool run_deform = prepare_deform(p_mesh, has_skinning, _skeletons);
 	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
 	if (run_deform) {
 		_deform_ops.push_back(make_deform_op(p_mesh, surface, info, dst, p_mesh.bone_transforms_mtl, p_mesh.blend_shape_weights_mtl, has_skinning, false));
@@ -530,36 +620,14 @@ void MeshEncoder::_encode_deform_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
 	}
 }
 
-void MeshEncoder::_encode_deform_with_uv(Mesh &p_mesh, uint32_t surface_idx) {
+void MeshEncoder::_encode_deform_compressed_pos(Mesh &p_mesh, uint32_t surface_idx) {
 	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
 	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
 	auto llm = surface.resource.lowLevelMesh();
 	ERR_FAIL_COND(llm.isNone());
 
 	bool has_skinning;
-	const bool run_deform = prepare_deform(p_mesh, has_skinning);
-	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
-	if (run_deform) {
-		_deform_ops.push_back(make_deform_op(p_mesh, surface, info, dst, p_mesh.bone_transforms_mtl, p_mesh.blend_shape_weights_mtl, has_skinning, false));
-	} else {
-		_blit_ops.push_back({ surface.base_vertex_mtl, dst, surface.base_vertex_mtl.length });
-	}
-
-	const godot::PackedByteArray attribute_data = surface.surface_data.get(attribute_data_key(), {});
-	id<MTLBuffer> asrc = make_staging_buffer(attribute_data);
-	id<MTLBuffer> dst_attr = llm.get().replaceAttributes(_command_buffer);
-	ERR_FAIL_COND(asrc == nil || dst_attr == nil);
-	_blit_ops.push_back({ asrc, dst_attr, asrc.length });
-}
-
-void MeshEncoder::_encode_deform_compressed_no_uv(Mesh &p_mesh, uint32_t surface_idx) {
-	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
-	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
-	auto llm = surface.resource.lowLevelMesh();
-	ERR_FAIL_COND(llm.isNone());
-
-	bool has_skinning;
-	const bool run_deform = prepare_deform(p_mesh, has_skinning);
+	const bool run_deform = prepare_deform(p_mesh, has_skinning, _skeletons);
 	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
 	if (run_deform) {
 		_deform_ops.push_back(make_deform_op(p_mesh, surface, info, dst, p_mesh.bone_transforms_mtl, p_mesh.blend_shape_weights_mtl, has_skinning, true));
@@ -568,24 +636,24 @@ void MeshEncoder::_encode_deform_compressed_no_uv(Mesh &p_mesh, uint32_t surface
 	}
 }
 
-void MeshEncoder::_encode_deform_compressed_with_uv(Mesh &p_mesh, uint32_t surface_idx) {
+// ---------------------------------------------------------------------------
+// Attribute encoding — only cares about compressed-or-not; deform is
+// irrelevant since skinning/blend shapes never touch color/UV data.
+
+void MeshEncoder::_encode_attributes_surface(Mesh &p_mesh, uint32_t surface_idx) {
 	Mesh::Surface &surface = p_mesh.surfaces[surface_idx];
 	const Mesh::SurfaceInfo &info = p_mesh.surface_infos[surface_idx];
 	auto llm = surface.resource.lowLevelMesh();
 	ERR_FAIL_COND(llm.isNone());
 
-	bool has_skinning;
-	const bool run_deform = prepare_deform(p_mesh, has_skinning);
-	id<MTLBuffer> dst = llm.get().replace(_command_buffer);
-	if (run_deform) {
-		_deform_ops.push_back(make_deform_op(p_mesh, surface, info, dst, p_mesh.bone_transforms_mtl, p_mesh.blend_shape_weights_mtl, has_skinning, true));
-	} else {
-		_blit_ops.push_back({ surface.base_vertex_mtl, dst, surface.base_vertex_mtl.length });
-	}
-
 	const godot::PackedByteArray attribute_data = surface.surface_data.get(attribute_data_key(), {});
 	id<MTLBuffer> asrc = make_staging_buffer(attribute_data);
 	id<MTLBuffer> dst_attr = llm.get().replaceAttributes(_command_buffer);
 	ERR_FAIL_COND(asrc == nil || dst_attr == nil);
-	_decompress_ops.push_back(make_attribute_decompress_op(asrc, dst_attr, info));
+
+	if (surface.encoding_mode & ENCODING_MODE_FLAG_COMPRESSED) {
+		_decompress_ops.push_back(make_attribute_decompress_op(asrc, dst_attr, info));
+	} else {
+		_blit_ops.push_back({ asrc, dst_attr, asrc.length });
+	}
 }

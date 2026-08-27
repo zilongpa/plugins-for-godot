@@ -14,7 +14,7 @@ renders Godot games with [RealityKit](https://developer.apple.com/documentation/
 
 ## PHASE
 
-The plugin in [phasegodot](./phasegodot/README.md)
+The plugin in [godotphase](./godotphase/README.md)
 brings Apple's [PHASE](https://developer.apple.com/documentation/phase) spatial audio framework to Godot,
 with support for macOS, iOS, tvOS, and visionOS.
 

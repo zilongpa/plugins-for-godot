@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #import "scene_tree.h"
+#import "controller_xr_interface.h"
 #import "node_loaders.h"
 #import "resource_loaders.h"
 
@@ -81,11 +82,12 @@ void SceneLoader::initialize(godot::Node *p_node, GodotRealityKit::Entity p_enti
 	std::get<ShapeLoader *>(resource_loaders) = memnew(gdrk::ShapeLoader);
 	std::get<EnvironmentLoader *>(resource_loaders) = memnew(gdrk::EnvironmentLoader);
 	std::get<SkyboxLoader *>(resource_loaders) = memnew(gdrk::SkyboxLoader);
+	std::get<SkeletonLoader *>(resource_loaders) = memnew(gdrk::SkeletonLoader);
 
 	nodes = memnew(gdrk::NodeLoaders);
 	nodes->initialize(root_entity);
 
-	std::get<MeshLoader *>(resource_loaders)->initialize();
+	std::get<MeshLoader *>(resource_loaders)->initialize(std::get<SkeletonLoader *>(resource_loaders));
 
 	took_capture = !should_dump_metal_capture();
 
@@ -123,6 +125,7 @@ void SceneLoader::update() {
 	ShapeLoader *shapes = std::get<ShapeLoader *>(resource_loaders);
 	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(resource_loaders);
 	SkyboxLoader *skyboxes = std::get<SkyboxLoader *>(resource_loaders);
+	SkeletonLoader *skeletons = std::get<SkeletonLoader *>(resource_loaders);
 
 	frame_count++;
 	nodes->update_deps(resource_loaders);
@@ -134,6 +137,7 @@ void SceneLoader::update() {
 
 	textures->remove_unreferenced();
 	meshes->remove_unreferenced();
+	skeletons->remove_unreferenced();
 	multimeshes->remove_unreferenced();
 	shapes->remove_unreferenced();
 	environments->remove_unreferenced();
@@ -146,11 +150,19 @@ void SceneLoader::update() {
 		took_capture = true;
 	}
 
+	if (!loading_in_progress) {
+		meshes->prepare_frame_changes();
+		nodes->update_transforms();
+		nodes->update_dirty_flags(resource_loaders);
+		nodes->update_visibility_states(resource_loaders);
+		nodes->update_deps_usage(resource_loaders);
+	}
+
 	id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
 
 	bool finished = true;
-	finished &= textures->update(command_buffer);
 	finished &= materials->update(command_buffer, textures);
+	finished &= textures->update(command_buffer);
 	finished &= meshes->update(command_buffer);
 	finished &= multimeshes->update();
 	finished &= shapes->update();
@@ -172,6 +184,8 @@ void SceneLoader::update() {
 	} else if (finished && loading_in_progress) {
 		loading_in_progress = false;
 		GodotRealityKit::stopBlockingAsyncTask();
+		reset_dirty_resources();
+		return;
 	}
 
 	if (!finished) {
@@ -180,14 +194,8 @@ void SceneLoader::update() {
 
 	nodes->update(resource_loaders);
 
-	textures->reset_dirty();
-	materials->reset_dirty();
-	meshes->reset_dirty();
-	multimeshes->reset_dirty();
-	shapes->reset_dirty();
+	reset_dirty_resources();
 	nodes->reset_dirty();
-	environments->reset_dirty();
-	skyboxes->reset_dirty();
 
 	if (!get_scene_tree()->is_paused() && on_next_frame_completion != std::nullopt) {
 		[command_buffer waitUntilCompleted];
@@ -196,10 +204,9 @@ void SceneLoader::update() {
 	}
 
 #if !TARGET_OS_OSX
-	if (!original_scene_destroyed && GodotRealityKit::isSceneVisible()) {
+	if (GodotRealityKit::hasOriginalScene() && GodotRealityKit::isSceneVisible()) {
 		[command_buffer waitUntilCompleted];
 		GodotRealityKit::destroyOriginalScene();
-		original_scene_destroyed = true;
 	}
 #endif
 }
@@ -222,6 +229,26 @@ void SceneLoader::flush_input_events() {
 	}
 
 	input_event_queue.clear();
+}
+
+void SceneLoader::reset_dirty_resources() {
+	TextureLoader *textures = std::get<TextureLoader *>(resource_loaders);
+	MaterialLoader *materials = std::get<MaterialLoader *>(resource_loaders);
+	MeshLoader *meshes = std::get<MeshLoader *>(resource_loaders);
+	MultiMeshLoader *multimeshes = std::get<MultiMeshLoader *>(resource_loaders);
+	ShapeLoader *shapes = std::get<ShapeLoader *>(resource_loaders);
+	EnvironmentLoader *environments = std::get<EnvironmentLoader *>(resource_loaders);
+	SkyboxLoader *skyboxes = std::get<SkyboxLoader *>(resource_loaders);
+	SkeletonLoader *skeletons = std::get<SkeletonLoader *>(resource_loaders);
+
+	textures->reset_dirty();
+	materials->reset_dirty();
+	meshes->reset_dirty();
+	multimeshes->reset_dirty();
+	shapes->reset_dirty();
+	environments->reset_dirty();
+	skyboxes->reset_dirty();
+	skeletons->reset_dirty();
 }
 
 void SceneLoader::dump_metal_capture(id<MTLCommandQueue> p_command_queue) {
@@ -250,6 +277,16 @@ RealitySceneTree::~RealitySceneTree() {
 	if (loader) {
 		memfree(loader);
 	}
+
+#if TARGET_OS_XR
+	if (controller_interface.is_valid()) {
+		controller_interface->uninitialize();
+		if (godot::XRServer *xr_server = godot::XRServer::get_singleton()) {
+			xr_server->remove_interface(controller_interface);
+		}
+		controller_interface.unref();
+	}
+#endif // TARGET_OS_XR
 }
 
 void RealitySceneTree::_initialize() {
@@ -265,8 +302,12 @@ void RealitySceneTree::_initialize() {
 	{
 		godot::ProjectSettings *ps = godot::ProjectSettings::get_singleton();
 		const char *key = "reality_kit/debug_rendering_on_macos";
-		if (!ps->has_setting(key) || !ps->get_setting(key).booleanize()) {
+		const bool macos_debug = ps->has_setting(key) && ps->get_setting(key).booleanize();
+		if (!macos_debug) {
 			enabled = false;
+		} else if (engine->is_embedded_in_editor()) {
+			WARN_PRINT("GodotRealityKit: reality_kit/debug_rendering_on_macos is enabled but the game is running embedded in the editor.\n"
+					   "Disable \"Embed Game on Next Play\".");
 		}
 	}
 #endif
@@ -288,18 +329,32 @@ void RealitySceneTree::_initialize() {
 
 #if TARGET_OS_XR
 	godot::ProjectSettings *project_settings = godot::ProjectSettings::get_singleton();
+	godot::XRServer *xr_server = godot::XRServer::get_singleton();
 
-	const bool controller_tracking_enabled = project_settings->get("xr/visionos/enable_controller_tracking_module");
-	godot::Ref<godot::XRInterface> controller_interface = godot::XRServer::get_singleton()->find_interface("visionOSControllerTracker");
-	if (controller_interface.is_valid() && controller_tracking_enabled &&
-			(extension_settings.presentationStyle == kVolumetricWindow || extension_settings.presentationStyle == kImmersive)) {
-		controller_interface->initialize();
+	const bool controller_tracking_enabled = project_settings->get("xr/visionos/enable_controller_tracking");
+	const bool hand_tracking_enabled = project_settings->get("xr/visionos/enable_hand_tracking");
+
+	// A shared volume has no compositor services session, so the engine's ARKit-backed tracker
+	// can't run there. Publish the poses of the controllers' RealityKit accessory anchors
+	// instead.
+	if (controller_tracking_enabled && extension_settings.presentationStyle == kVolumetricWindow) {
+		godot::Ref<RealityControllerXRInterface> accessory_interface;
+		accessory_interface.instantiate();
+		xr_server->add_interface(accessory_interface);
+		accessory_interface->initialize();
+		controller_interface = accessory_interface;
 	}
 
-	const bool hand_tracking_enabled = project_settings->get("xr/visionos/enable_hand_tracking_module");
-	godot::Ref<godot::XRInterface> hands_interface = godot::XRServer::get_singleton()->find_interface("visionOSHandTracker");
-	if (hands_interface.is_valid() && hand_tracking_enabled && extension_settings.presentationStyle == kImmersive) {
-		hands_interface->initialize();
+	// Both are immersive-only now that a shared volume tracks the controllers through their
+	// accessory anchors above.
+	const bool controllers_apply = controller_tracking_enabled && extension_settings.presentationStyle == kImmersive;
+	const bool hands_apply = hand_tracking_enabled && extension_settings.presentationStyle == kImmersive;
+
+	if (controllers_apply || hands_apply) {
+		godot::Ref<godot::XRInterface> xr_interface = xr_server->find_interface("visionOS");
+		if (xr_interface.is_valid()) {
+			xr_interface->initialize();
+		}
 	}
 #endif // TARGET_OS_XR
 

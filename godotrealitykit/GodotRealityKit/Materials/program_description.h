@@ -22,6 +22,102 @@
 #include <format>
 
 namespace gdrk {
+
+struct RenderModeDescription {
+	enum BlendMode : uint8_t {
+		BLEND_MIX = 0,
+		BLEND_ADD,
+		BLEND_SUB,
+		BLEND_MUL,
+		BLEND_PREMUL_ALPHA,
+		BLEND_MAX,
+	};
+
+	enum DepthDrawMode : uint8_t {
+		DEPTH_DRAW_OPAQUE = 0,
+		DEPTH_DRAW_ALWAYS,
+		DEPTH_DRAW_NEVER,
+		DEPTH_DRAW_MAX,
+	};
+
+	enum DepthTestMode : uint8_t {
+		DEPTH_TEST_DEFAULT = 0,
+		DEPTH_TEST_INVERTED = 2,
+	};
+
+	enum CullMode : uint8_t {
+		CULL_BACK = 0,
+		CULL_FRONT,
+		CULL_DISABLED,
+		CULL_MAX,
+	};
+
+	enum DiffuseMode : uint8_t {
+		DIFFUSE_LAMBERT = 0,
+		DIFFUSE_LAMBERT_WRAP,
+		DIFFUSE_BURLEY,
+		DIFFUSE_TOON,
+		DIFFUSE_MAX,
+	};
+
+	enum SpecularMode : uint8_t {
+		SPECULAR_SCHLICK_GGX = 0,
+		SPECULAR_TOON,
+		SPECULAR_DISABLED,
+		SPECULAR_MAX,
+	};
+
+	enum Flag : uint8_t {
+		FLAG_DEPTH_PREPASS_ALPHA = 0,
+		FLAG_DEPTH_TEST_DISABLED,
+		FLAG_SSS_MODE_SKIN,
+		FLAG_UNSHADED,
+		FLAG_WIREFRAME,
+		FLAG_SKIP_VERTEX_TRANSFORM,
+		FLAG_WORLD_VERTEX_COORDS,
+		FLAG_ENSURE_CORRECT_NORMALS,
+		FLAG_SHADOWS_DISABLED,
+		FLAG_AMBIENT_LIGHT_DISABLED,
+		FLAG_SHADOW_TO_OPACITY,
+		FLAG_VERTEX_LIGHTING,
+		FLAG_PARTICLE_TRAILS,
+		FLAG_ALPHA_TO_COVERAGE,
+		FLAG_ALPHA_TO_COVERAGE_AND_ONE,
+		FLAG_DEBUG_SHADOW_SPLITS,
+		FLAG_FOG_DISABLED,
+		FLAG_SPECULAR_OCCLUSION_DISABLED,
+		FLAG_MAX,
+	};
+
+	enum MultiMode : uint8_t {
+		MULTI_BLEND = 0,
+		MULTI_DEPTH_DRAW,
+		MULTI_DEPTH_TEST,
+		MULTI_CULL,
+		MULTI_DIFFUSE,
+		MULTI_SPECULAR,
+		MULTI_MAX,
+	};
+
+	uint32_t blend : 3 = BLEND_MIX;
+	uint32_t depth_draw : 2 = DEPTH_DRAW_OPAQUE;
+	uint32_t depth_test : 2 = DEPTH_TEST_DEFAULT;
+	uint32_t cull : 2 = CULL_BACK;
+	uint32_t diffuse : 2 = DIFFUSE_LAMBERT;
+	uint32_t specular : 2 = SPECULAR_SCHLICK_GGX;
+	uint32_t flags = 0;
+
+	inline bool get_flag(Flag p_flag) const { return (flags & (1u << p_flag)) != 0; }
+	inline void set_flag(Flag p_flag, bool p_enabled) {
+		const uint32_t bit = 1u << p_flag;
+		flags = p_enabled ? (flags | bit) : (flags & ~bit);
+	}
+
+	static RenderModeDescription from_visual_shader(const godot::Ref<godot::VisualShader> &p_shader);
+
+	std::string to_string() const;
+};
+
 struct BaseMaterial3DDescription {
 	using BM = godot::BaseMaterial3D;
 	godot::RID next_pass = godot::RID();
@@ -38,13 +134,29 @@ struct BaseMaterial3DDescription {
 	uint32_t distance_fade : godot::get_num_bits(BM::DISTANCE_FADE_OBJECT_DITHER - 0) = BM::DISTANCE_FADE_DISABLED;
 	uint32_t flags = 0;
 	uint32_t features = 0;
+	bool use_depth_postpass = false;
 
 	inline bool get_flag(godot::BaseMaterial3D::Flags p_flag) const { return flags & (1 << p_flag); }
 	inline bool get_feature(godot::BaseMaterial3D::Feature p_feature) const { return features & (1 << p_feature); }
 	inline bool is_transparent() const { return transparency == godot::BaseMaterial3D::TRANSPARENCY_ALPHA; }
 
 	inline uint32_t hash() {
-		return godot::hash_murmur3_buffer(this, sizeof(BaseMaterial3DDescription));
+		uint32_t h = godot::hash_murmur3_one_64(uint64_t(next_pass.get_id()));
+		h = godot::hash_murmur3_one_32(uint32_t(render_priority), h);
+		h = godot::hash_murmur3_one_32(shading_mode, h);
+		h = godot::hash_murmur3_one_32(transparency, h);
+		h = godot::hash_murmur3_one_32(blend_mode, h);
+		h = godot::hash_murmur3_one_32(cull_mode, h);
+		h = godot::hash_murmur3_one_32(depth_draw_mode, h);
+		h = godot::hash_murmur3_one_32(billboard_mode, h);
+		h = godot::hash_murmur3_one_32(texture_filter, h);
+		h = godot::hash_murmur3_one_32(detail_blend_mode, h);
+		h = godot::hash_murmur3_one_32(detail_uv_layer, h);
+		h = godot::hash_murmur3_one_32(distance_fade, h);
+		h = godot::hash_murmur3_one_32(flags, h);
+		h = godot::hash_murmur3_one_32(features, h);
+		h = godot::hash_murmur3_one_32(uint32_t(use_depth_postpass), h);
+		return h;
 	}
 
 	std::string to_string() const;
@@ -56,17 +168,27 @@ struct ShaderMaterialDescription {
 	godot::LocalVector<gdrk::UniformDescriptor> uniforms;
 	godot::LocalVector<uint8_t> texture_idxs;
 	godot::LocalVector<uint8_t> const_texture_idxs;
-	bool transparent;
+	RenderModeDescription render_mode;
+	int32_t render_priority = 0;
+	bool transparent = false;
+	bool use_depth_postpass = false;
+
+	ShaderMaterialDescription() = default;
+	ShaderMaterialDescription(godot::Ref<godot::VisualShader> p_shader, int32_t p_render_priority = 0) :
+			shader(p_shader),
+			render_mode(RenderModeDescription::from_visual_shader(p_shader)),
+			render_priority(p_render_priority) {}
 
 	inline bool is_transparent() const { return transparent; }
-	inline std::string to_string() const { return std::format("ShaderMaterialDescription: shader_rid: {}", shader.is_null() ? 0 : shader->get_rid().get_id()); }
+	std::string to_string() const;
 
 	inline uint32_t hash() {
 		if (shader.is_null()) {
 			return 0;
 		}
 
-		return godot::HashMapHasherDefault::hash(shader->get_rid().get_id());
+		const uint32_t h = godot::HashMapHasherDefault::hash(shader->get_rid().get_id());
+		return use_depth_postpass ? godot::hash_murmur3_one_32(1, h) : h;
 	}
 
 	template <std::invocable<uint8_t, const UniformDescriptor &> Fn>
@@ -114,8 +236,7 @@ struct ProgramDescription {
 	}
 
 	ProgramDescription(godot::Ref<godot::VisualShader> p_shader) :
-			ProgramDescription(ShaderMaterialDescription{
-					.shader = p_shader }) {
+			ProgramDescription(ShaderMaterialDescription(p_shader)) {
 	}
 
 	ProgramDescription() :
@@ -134,6 +255,10 @@ struct ProgramDescription {
 
 	PD_COMMON_GETTER(bool, is_transparent);
 	PD_COMMON_GETTER(std::string, to_string);
+
+	inline bool use_depth_postpass() const {
+		return material_type == MATERIAL_TYPE_SHADER_MATERIAL ? asShaderMaterial().use_depth_postpass : asBaseMaterial3D().use_depth_postpass;
+	}
 
 	inline bool is_valid() const {
 		return material_type != MATERIAL_TYPE_UNKNOWN;

@@ -53,9 +53,12 @@ bool SkyboxLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 	}
 
 	return for_each_dirty_throttled([&](uint32_t idx) {
+		if (!is_used_in_frame(idx)) {
+			return LocalBitVector::IterationResult::SKIPPED;
+		}
 		godot::Ref<godot::Environment> env = skyboxes[idx].environment;
 		const godot::RID env_rid = env->get_rid();
-		ERR_FAIL_COND((!env_rid.is_valid()));
+		ERR_FAIL_COND_V((!env_rid.is_valid()), LocalBitVector::IterationResult::SKIPPED);
 
 		godot::Environment::BGMode bg_mode = env->get_background();
 		switch (bg_mode) {
@@ -101,7 +104,7 @@ bool SkyboxLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 									[src_texture usage],
 									[src_texture swizzle]);
 
-					ERR_FAIL_COND_MSG(low_level_texture.isNone(), "Failed to create low level texture");
+					ERR_FAIL_COND_V_MSG(low_level_texture.isNone(), LocalBitVector::IterationResult::SKIPPED, "Failed to create low level texture");
 
 					id<MTLTexture> dst_texture = low_level_texture.get().replace(p_command_buffer);
 					id<MTLBlitCommandEncoder> blit_encoder = [p_command_buffer blitCommandEncoder];
@@ -128,5 +131,6 @@ bool SkyboxLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 				break;
 			}
 		}
+		return LocalBitVector::IterationResult::PROCESSED;
 	});
 }

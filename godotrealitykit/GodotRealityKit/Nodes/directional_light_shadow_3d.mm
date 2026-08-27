@@ -52,10 +52,27 @@ void RealityKitDirectionalLightShadow3D::_notification(int p_what) {
 			set_notify_transform(true);
 		case NOTIFICATION_PARENTED:
 		case NOTIFICATION_UNPARENTED:
-		case NOTIFICATION_TRANSFORM_CHANGED:
 			update_configuration_warnings();
 			break;
+		case NOTIFICATION_TRANSFORM_CHANGED:
+			_apply_transform_to_parent();
+			break;
 	}
+}
+
+void RealityKitDirectionalLightShadow3D::_apply_transform_to_parent() {
+	auto *parent = godot::Object::cast_to<godot::DirectionalLight3D>(get_parent());
+	if (!parent) {
+		update_configuration_warnings();
+		return;
+	}
+	godot::Transform3D local = get_transform();
+	if (local == godot::Transform3D()) {
+		update_configuration_warnings();
+		return;
+	}
+	set_transform(godot::Transform3D());
+	parent->set_transform(parent->get_transform() * local);
 }
 
 godot::PackedStringArray RealityKitDirectionalLightShadow3D::_get_configuration_warnings() const {
