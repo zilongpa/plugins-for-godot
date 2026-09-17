@@ -38,10 +38,6 @@
 #include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
-#if !TARGET_OS_OSX
-#include "Loaders/Util/cgimage_util.h"
-#endif
-
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 
@@ -341,8 +337,22 @@ UIImage *GDRKBridgeDelegate::getBootSplashImage() const {
 		return nil;
 	}
 
-	image->convert(godot::Image::FORMAT_RGBAF);
-	CGImageRef cg_image = gdrk::cgimage_from_godot_image(image);
+	// Splash pixels are sRGB, unlike the linear images used for environment lighting.
+	// Keep straight alpha and explicitly tag the bytes instead of treating them as linear.
+	image->convert(godot::Image::FORMAT_RGBA8);
+	godot::PackedByteArray pixels = image->get_data();
+	NSData *data = [NSData dataWithBytes:pixels.ptr() length:pixels.size()];
+	CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+	CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+	CGImageRef cg_image = CGImageCreate(image->get_width(), image->get_height(),
+			8, 32, image->get_width() * 4, color_space,
+			kCGImageAlphaLast | kCGBitmapByteOrderDefault, provider,
+			nullptr, false, kCGRenderingIntentDefault);
+	CGColorSpaceRelease(color_space);
+	CGDataProviderRelease(provider);
+	if (!cg_image) {
+		return nil;
+	}
 	UIImage *ui_image = [UIImage imageWithCGImage:cg_image];
 	CGImageRelease(cg_image);
 	return ui_image;
