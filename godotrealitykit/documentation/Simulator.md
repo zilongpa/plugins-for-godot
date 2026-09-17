@@ -87,9 +87,9 @@ device binary to make it appear to be a simulator binary.
 
 ## Enable the experimental runtime path
 
-Set `GDRK_SIMULATOR_SKIP_GPU_CHECK=1` in the exported Xcode scheme's **Run →
-Arguments → Environment Variables**, then select an Apple Vision Pro Simulator
-and run. The flag is read only in `VISIONOS_SIMULATOR` builds; it leaves the
+The export plugin automatically enables `GDRK_SIMULATOR_SKIP_GPU_CHECK=1` in the
+exported Xcode scheme's **Run → Arguments → Environment Variables** on every
+visionOS export. Select an Apple Vision Pro Simulator and run. The flag is read only in `VISIONOS_SIMULATOR` builds; it leaves the
 device capability flags and the physical-device check unchanged.
 
 Alternatively, install to a booted simulator and launch with `simctl` (replace
