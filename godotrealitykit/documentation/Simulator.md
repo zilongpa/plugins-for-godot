@@ -11,16 +11,17 @@ The default SCons/addon export flow still builds device libraries only.
 - A working Debug build of this plugin and its pinned Godot/godot-cpp dependencies
   following [Building](Building.md). The commands below run from `godotrealitykit/`
   and use the `deps` symlink created by the normal framework build.
-- Godot commit `b2cd2726f65598d9dfdfc11242a2508551d5a629`, as specified in `deps.conf`.
+- Godot commit `a191f79b9af68f3cd168687e062426578093bc8f`, as specified in `deps.conf`.
 - An **isolated copy** of a Debug visionOS Xcode export. Packaging below replaces
   its plugin framework with a simulator-only framework; do not use that copy for
   device deployment or distribution.
 
 The shared GPU code is in the external Godot dependency, not this plugin repo.
-Its changes are retained in `patches/godot-visionos-simulator.patch` against the
-commit above. This repo does not change the dependency URL or claim to publish a
-new Godot fork. Apply the patch after fetching/building dependencies; do not reset
-or re-checkout the dependency while using the patched build.
+The pinned [Godot fork](https://github.com/zilongpa/godot) already includes the
+simulator changes, based on rsanchezsaez/godot commit
+`b2cd2726f65598d9dfdfc11242a2508551d5a629`. No manual patch is needed.
+`patches/godot-visionos-simulator.patch` is retained only as a reference diff
+against that upstream commit; do not apply it to the configured fork.
 
 ## Build the simulator libraries
 
@@ -29,9 +30,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 GDRK_ROOT="$PWD"
 GDRK_DEPS="$(cd deps && pwd)"
 
-test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = b2cd2726f65598d9dfdfc11242a2508551d5a629
-git -C "$GDRK_DEPS/godot" apply --check "$GDRK_ROOT/patches/godot-visionos-simulator.patch"
-git -C "$GDRK_DEPS/godot" apply "$GDRK_ROOT/patches/godot-visionos-simulator.patch"
+test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = a191f79b9af68f3cd168687e062426578093bc8f
 
 scons -C "$GDRK_DEPS/godot" -j4 platform=visionos target=template_debug \
     simulator=yes arch=arm64 generate_bundle=no vulkan=false \
@@ -49,9 +48,9 @@ xcodebuild build -jobs 3 \
     -derivedDataPath "$GDRK_ROOT/out/simulator" CODE_SIGNING_ALLOWED=NO
 ```
 
-Apply the engine patch only once. If already applied, check it with
-`git apply --reverse --check` instead of reapplying it. Stop on a patch conflict
-and inspect the dependency changes; do not discard local edits.
+If reusing a shared workspace, verify that its Godot checkout matches the pinned
+commit above. An existing workspace may still contain the old upstream checkout;
+update it deliberately and preserve any local edits before building.
 
 `ios_simulator=yes` is the existing godot-cpp switch that adds `.simulator` to
 object/library names. Our visionOS tool also uses it to select the **visionOS**
