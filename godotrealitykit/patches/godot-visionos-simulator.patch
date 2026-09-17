@@ -1,3 +1,44 @@
+diff --git a/drivers/metal/metal_device_properties.cpp b/drivers/metal/metal_device_properties.cpp
+index 234a09d8d6..2e0bc163be 100644
+--- a/drivers/metal/metal_device_properties.cpp
++++ b/drivers/metal/metal_device_properties.cpp
+@@ -164,6 +164,10 @@ void MetalDeviceProperties::init_features(MTL::Device *p_device) {
+ 		features.supports_native_image_atomics = false;
+ 	}
+ 
++#ifdef VISIONOS_SIMULATOR
++	// Simulator advertises the OS API but cannot use residency sets reliably.
++	features.supports_residency_sets = false;
++#else
+ 	if (OS::get_singleton()->get_processor_name().contains("Virtual")) {
+ 		features.supports_residency_sets = false;
+ 	} else if (__builtin_available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+@@ -172,6 +176,8 @@ void MetalDeviceProperties::init_features(MTL::Device *p_device) {
+ 		features.supports_residency_sets = false;
+ 	}
+ 
++#endif
++
+ 	if (__builtin_available(macOS 13.0, iOS 16.0, tvOS 16.0, *)) {
+ 		features.needs_arg_encoders = !(p_device->supportsFamily(MTL::GPUFamilyMetal3) && features.argument_buffers_tier == MTL::ArgumentBuffersTier2);
+ 	}
+diff --git a/drivers/metal/metal_objects_shared.h b/drivers/metal/metal_objects_shared.h
+index b3db7ab2b7..516a310ee5 100644
+--- a/drivers/metal/metal_objects_shared.h
++++ b/drivers/metal/metal_objects_shared.h
+@@ -1061,7 +1061,12 @@ public:
+ 		_FORCE_INLINE_ void apply(T *p_enc) const {
+ 			p_enc->setCullMode(cull_mode);
+ 			p_enc->setTriangleFillMode(fill_mode);
++#ifndef VISIONOS_SIMULATOR
+ 			p_enc->setDepthClipMode(clip_mode);
++#else
++			// The simulator rejects setDepthClipMode under Metal API validation.
++			// Keep its default clipping behavior; depth clamping is unavailable here.
++#endif
+ 			p_enc->setFrontFacingWinding(winding);
+ 			depth_bias.apply(p_enc);
+ 			stencil.apply(p_enc);
 diff --git a/drivers/metal/rendering_context_driver_metal.cpp b/drivers/metal/rendering_context_driver_metal.cpp
 index c7d55485d5..25f4201bf3 100644
 --- a/drivers/metal/rendering_context_driver_metal.cpp
@@ -20,25 +61,47 @@ index c7d55485d5..25f4201bf3 100644
  
  	MTL::Drawable *next_drawable() override final {
 diff --git a/drivers/metal/rendering_device_driver_metal.cpp b/drivers/metal/rendering_device_driver_metal.cpp
-index baaa7733ac..ff2faa5839 100644
+index baaa7733ac..a996ab3590 100644
 --- a/drivers/metal/rendering_device_driver_metal.cpp
 +++ b/drivers/metal/rendering_device_driver_metal.cpp
+@@ -2541,7 +2541,7 @@ Error RenderingDeviceDriverMetal::_copy_queue_initialize() {
+ 	copy_queue_buffer.get()->setLabel(MTLSTR("Copy Command Scratch Buffer"));
+ 
+ 	if (__builtin_available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 1.0, *)) {
+-		if (!OS::get_singleton()->get_processor_name().contains("Virtual")) {
++		if (device_properties->features.supports_residency_sets) {
+ 			MTL::ResidencySetDescriptor *rs_desc = MTL::ResidencySetDescriptor::alloc()->init();
+ 			rs_desc->setInitialCapacity(2);
+ 			rs_desc->setLabel(MTLSTR("Copy Queue Residency Set"));
 @@ -2923,7 +2923,14 @@ Error RenderingDeviceDriverMetal::_initialize(uint32_t p_device_index, uint32_t
  	}
  
  	// The Metal renderer requires Apple4 family. This is 2017 era A11 chips and newer.
 -	if (device_properties->features.highestFamily < MTL::GPUFamilyApple4) {
-+	bool skip_simulator_gpu_check = false;
 +#ifdef VISIONOS_SIMULATOR
-+	skip_simulator_gpu_check = OS::get_singleton()->get_environment("GDRK_SIMULATOR_SKIP_GPU_CHECK") == "1";
-+	if (skip_simulator_gpu_check) {
-+		WARN_PRINT("Experimental simulator mode: skipping the Apple4 GPU check; reported device capabilities remain unchanged.");
-+	}
++	// Simulator reports Apple2 even on newer hosts. Allow startup by default;
++	// unsupported simulator operations are handled separately without spoofing GPU features.
++	const bool skip_simulator_gpu_check = true;
++#else
++	const bool skip_simulator_gpu_check = false;
 +#endif
 +	if (!skip_simulator_gpu_check && device_properties->features.highestFamily < MTL::GPUFamilyApple4) {
  		String error_string = vformat("Your Apple GPU does not support the following features, which are required to use Metal-based renderers in Godot:\n\n");
  		if (!device_properties->features.imageCubeArray) {
  			error_string += "- No support for image cube arrays.\n";
+diff --git a/drivers/metal/rendering_device_driver_metal3.cpp b/drivers/metal/rendering_device_driver_metal3.cpp
+index 1fbd16fbd5..893325a87c 100644
+--- a/drivers/metal/rendering_device_driver_metal3.cpp
++++ b/drivers/metal/rendering_device_driver_metal3.cpp
+@@ -110,7 +110,7 @@ Error RenderingDeviceDriverMetal::initialize(uint32_t p_device_index, uint32_t p
+ 	// and can only be enabled via an environment variable.
+ 	bool barriers_enabled = OS::get_singleton()->get_environment("GODOT_MTL_FORCE_BARRIERS") == "1";
+ 	if (__builtin_available(macos 26.0, ios 26.0, tvos 26.0, visionos 26.0, *)) {
+-		if (barriers_enabled) {
++		if (barriers_enabled && device_properties->features.supports_residency_sets) {
+ 			print_line("Metal 3: Resource barriers enabled.");
+ 			NS::SharedPtr<MTL::ResidencySetDescriptor> rs_desc = NS::TransferPtr(MTL::ResidencySetDescriptor::alloc()->init());
+ 			rs_desc->setInitialCapacity(250);
 diff --git a/platform/visionos/detect.py b/platform/visionos/detect.py
 index 83aa2a1b80..922f5e11fd 100644
 --- a/platform/visionos/detect.py

@@ -1,7 +1,7 @@
 # Experimental visionOS Simulator support
 
 The bundled RealityKit platform demo and a GLB flipbook scene have been displayed
-on an Apple Silicon Mac in visionOS 27 Simulator. This is an opt-in development
+on an Apple Silicon Mac in visionOS 27 Simulator. This is an experimental development
 path, not complete simulator support for all Godot renderers or plugin features.
 The default SCons/addon export flow still builds device libraries only.
 
@@ -11,7 +11,7 @@ The default SCons/addon export flow still builds device libraries only.
 - A working Debug build of this plugin and its pinned Godot/godot-cpp dependencies
   following [Building](Building.md). The commands below run from `godotrealitykit/`
   and use the `deps` symlink created by the normal framework build.
-- Godot commit `a191f79b9af68f3cd168687e062426578093bc8f`, as specified in `deps.conf`.
+- Godot commit `30c244d4c51a6e019a824c8ebfd346847e2686ab`, as specified in `deps.conf`.
 - An **isolated copy** of a Debug visionOS Xcode export. Packaging below replaces
   its plugin framework with a simulator-only framework; do not use that copy for
   device deployment or distribution.
@@ -30,7 +30,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 GDRK_ROOT="$PWD"
 GDRK_DEPS="$(cd deps && pwd)"
 
-test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = a191f79b9af68f3cd168687e062426578093bc8f
+test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = 30c244d4c51a6e019a824c8ebfd346847e2686ab
 
 scons -C "$GDRK_DEPS/godot" -j4 platform=visionos target=template_debug \
     simulator=yes arch=arm64 generate_bundle=no vulkan=false \
@@ -85,27 +85,16 @@ The pinned export template's XCFramework Info.plist already declares
 step. Verify that declaration if using another export template. Do not rename a
 device binary to make it appear to be a simulator binary.
 
-## Enable the experimental runtime path
+## Run the simulator build
 
-The export plugin automatically enables `GDRK_SIMULATOR_SKIP_GPU_CHECK=1` in the
-exported Xcode scheme's **Run → Arguments → Environment Variables** on every
-visionOS export. Select an Apple Vision Pro Simulator and run. The flag is read only in `VISIONOS_SIMULATOR` builds; it leaves the
-device capability flags and the physical-device check unchanged.
+Select an Apple Vision Pro Simulator in the exported Xcode project and run.
+The pinned engine automatically skips the Apple4 startup gate, unsupported depth
+clip mode calls, and residency sets when compiled with `VISIONOS_SIMULATOR`.
+No launch environment variable is required, including when launching from the
+simulator home screen. Physical-device behavior is unchanged.
 
-Alternatively, install to a booted simulator and launch with `simctl` (replace
-the UUID and the bundle ID with those from your simulator/export):
-
-```sh
-GDRK_SIMULATOR_UUID='<booted simulator UUID>'
-GDRK_BUNDLE_ID='<exported application bundle ID>'
-xcrun simctl install "$GDRK_SIMULATOR_UUID" \
-    "$GDRK_ROOT/out/simulator-app/Build/Products/Debug-xrsimulator/$GDRK_BINARY.app"
-SIMCTL_CHILD_GDRK_SIMULATOR_SKIP_GPU_CHECK=1 xcrun simctl launch \
-    --terminate-running-process "$GDRK_SIMULATOR_UUID" "$GDRK_BUNDLE_ID"
-```
-
-Launching from the simulator home screen does not necessarily preserve this
-environment variable. Use Xcode or the explicit `simctl` launch command.
+Depth clamping remains unavailable: the simulator keeps its default clipping
+behavior. These compatibility defaults do not add missing GPU features.
 
 ## What changed and why
 
@@ -115,9 +104,11 @@ environment variable. Use Xcode or the explicit `simctl` launch command.
 | `GodotRealityKit/Configurations/Config.xcconfig` | Accept `xrsimulator` and link matching Debug/Release simulator godot-cpp libraries. |
 | `scripts/build/swift-frontend-wrapper.sh` | Find simulator SwiftUI host macros in the corresponding XROS device platform. |
 | `scripts/build/generate-default-metallib.sh` | Compile the Metal library for the framework's platform rather than always macOS. |
+| Engine: `drivers/metal/metal_objects_shared.h` | Omit unsupported depth clip mode calls in simulator builds. |
+| Engine: `drivers/metal/metal_device_properties.cpp` | Disable residency sets for simulator builds; queue setup honors this capability. |
 | Engine: `platform/visionos/detect.py` | Keep requested Metal support enabled for simulator builds; XR and plugin code depend on it. |
 | Engine: `thirdparty/metal-cpp/metal_cpp.cpp` | Use metal-cpp's runtime lookup for optional constants absent from the simulator SDK. |
-| Engine: `drivers/metal/rendering_device_driver_metal.cpp` | Allow an explicit simulator-only bypass of the Apple4 minimum-family check. |
+| Engine: `drivers/metal/rendering_device_driver_metal.cpp` | Skip the Apple4 minimum-family check by default only for simulator builds. |
 | Engine: `drivers/metal/rendering_context_driver_metal.cpp` | Use ordinary `presentDrawable`, since `MTLSimCommandBuffer` does not implement the minimum-duration variant. |
 
 The GPU-family check rejected the scene before it could start. Bypassing it
@@ -134,7 +125,11 @@ The scoped framework from this fork was then independently rebuilt and packaged
 with the bundled platform demo; its floor, stairs and character were confirmed
 visible in Simulator without those unrelated changes. Hand/controller tracking, all materials/shadows, Release builds and
 physical-device regressions are not covered. Missing simulator GPU capabilities
-remain missing: this opt-in must not be interpreted as general Metal support.
+remain missing: these defaults must not be interpreted as general Metal support.
 
 See Apple's [Metal simulator limitations](https://developer.apple.com/documentation/metal/developing-metal-apps-that-run-in-simulator)
 and the [Metal feature tables](https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf).
+
+The default-compatibility engine was also checked with Wiz on visionOS 27
+Simulator: no GPU override environment variable, Metal API validation enabled,
+and the sample cube/platform visibly rendered. This does not certify other scenes.
