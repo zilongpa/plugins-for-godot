@@ -63,3 +63,9 @@ addons/GodotRealityKit/
         GodotRealityKit.framework
         godot_visionos.zip
 ```
+
+## Experimental visionOS Simulator builds
+
+See [Simulator](Simulator.md) for the opt-in Debug arm64 workflow, the pinned
+Godot engine patch, and tested limitations. The default addon remains a device
+build; selecting a simulator in Xcode alone is not sufficient.

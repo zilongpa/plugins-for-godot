@@ -36,6 +36,10 @@ done
 plugin_args=()
 if [ -n "$sdk_path" ]; then
     platform_dev_root="$(cd "$sdk_path/../.." && pwd)"
+    # Simulator SDKs share host macros with the corresponding device platform.
+    if [[ "$platform_dev_root" == */XRSimulator.platform/Developer ]]; then
+        platform_dev_root="${platform_dev_root%/XRSimulator.platform/Developer}/XROS.platform/Developer"
+    fi
     for subdir in usr/lib/swift/host/plugins usr/local/lib/swift/host/plugins; do
         plugin_path="$platform_dev_root/$subdir"
         if [ -d "$plugin_path" ]; then

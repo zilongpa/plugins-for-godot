@@ -1,9 +1,11 @@
 ## Troubleshooting
 
-### Build for a physical Apple Vision Pro instead of the simulator
+### Default exports require a physical Apple Vision Pro
 
-GodotRealityKit does not currently work on the visionOS simulator. It requires
-a physical Apple Vision Pro device.
+The default export contains physical Apple Vision Pro libraries only. For the
+opt-in simulator experiment, follow [Simulator](Simulator.md), including the
+Godot engine patch and runtime environment variable. This is not full simulator
+support for all plugin features.
 
 Xcode shows the following compilation error if you try to build for the visionOS simulator:
 

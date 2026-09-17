@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 import common_compiler_flags
+from SCons.Variables import BoolVariable
 
 
 def has_visionos_osxcross():
@@ -22,6 +23,7 @@ def has_visionos_osxcross():
 
 
 def options(opts):
+    opts.Add(BoolVariable("ios_simulator", "Build visionOS simulator (also separates output filenames)", False))
     opts.Add("visionos_min_version", "Target minimum visionos version", "2.0")
     opts.Add("VISIONOS_TOOLCHAIN_PATH", "Path to visionOS toolchain", "")
     opts.Add("VISIONOS_SDK_PATH", "Path to the visionOS SDK", "")
@@ -38,9 +40,11 @@ def generate(env):
     if env["arch"] not in ("universal", "arm64", "x86_64"):
         raise ValueError("Only universal, arm64, and x86_64 are supported on visionOS. Exiting.")
 
-    sdk_name = "xros"
-    env.Append(ASFLAGS=["-mtargetos=xros2.0"])
-    env.Append(CCFLAGS=["-mtargetos=xros2.0"])
+    sdk_name = "xrsimulator" if env["ios_simulator"] else "xros"
+    target = "-mtargetos=xros" + env["visionos_min_version"] + ("-simulator" if env["ios_simulator"] else "")
+    env.Append(ASFLAGS=[target])
+    env.Append(CCFLAGS=[target])
+    env.Append(LINKFLAGS=[target])
 
     if sys.platform == "darwin":
         if env["VISIONOS_SDK_PATH"] == "":

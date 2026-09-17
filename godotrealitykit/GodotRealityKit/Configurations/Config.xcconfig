@@ -14,7 +14,7 @@ GEN_RESOURCE_FILE_LIST_PATH = $(PROJECT_DIR)/Configurations/resources.gen.xcfile
 ARCHS = arm64
 MACOSX_DEPLOYMENT_TARGET = 26.0
 ONLY_ACTIVE_ARCH = NO
-SUPPORTED_PLATFORMS = macosx xros
+SUPPORTED_PLATFORMS = macosx xros xrsimulator
 SUPPORTS_MACCATALYST = NO
 XROS_DEPLOYMENT_TARGET = 26.0
 
@@ -91,6 +91,9 @@ SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = NO
 // Default linker flags. SDK-conditional flags pick the matching godot-cpp library.
 OTHER_LDFLAGS =
 OTHER_LDFLAGS[sdk=macosx*] = -lgodot-cpp.macos.editor.universal -framework CoreHaptics
+GDRK_SIMULATOR_CONFIG[config=Debug] = debug
+GDRK_SIMULATOR_CONFIG[config=Release] = release
+OTHER_LDFLAGS[sdk=xrsimulator*] = -lgodot-cpp.visionos.template_$(GDRK_SIMULATOR_CONFIG).arm64.simulator -framework CoreHaptics
 OTHER_LDFLAGS[sdk=xros*] = -lgodot-cpp.visionos.template.arm64 -framework CoreHaptics
 
 // Common preprocessor defines.

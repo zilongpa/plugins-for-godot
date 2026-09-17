@@ -21,6 +21,14 @@ cd "$REPO_DIR/GodotRealityKit"
 
 airFiles=()
 
+# The library must target the same platform as the framework consuming it.
+case "${PLATFORM_NAME:-macosx}" in
+    xrsimulator) metal_sdk=xrsimulator; metal_target=air64-apple-xros26.0-simulator ;;
+    xros) metal_sdk=xros; metal_target=air64-apple-xros26.0 ;;
+    macosx) metal_sdk=macosx; metal_target=air64-apple-macos15.0 ;;
+    *) echo "Unsupported Metal platform: $PLATFORM_NAME" >&2; exit 1 ;;
+esac
+
 mkdir -p "$METAL_LIBRARY_OUTPUT_DIR"
 
 for metalFile in "$REPO_DIR/GodotRealityKit/Metal/"*.metal ; do
@@ -28,13 +36,13 @@ for metalFile in "$REPO_DIR/GodotRealityKit/Metal/"*.metal ; do
     airFile="$BUILT_PRODUCTS_DIR/${f%.metal}.air"
     airFiles+=("$airFile")
 
-    xcrun -sdk macosx metal \
+    xcrun -sdk "$metal_sdk" metal \
           -c "$metalFile" \
           -o "$airFile" \
           -std=metal3.0 \
-          -target air64-apple-macos15.0
+          -target "$metal_target"
 done
 
-xcrun -sdk macosx metallib \
+xcrun -sdk "$metal_sdk" metallib \
             "${airFiles[@]}" \
             -o "$METAL_LIBRARY_OUTPUT_DIR/default.metallib"
