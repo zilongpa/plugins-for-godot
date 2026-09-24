@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VisionOSHoverStyle2D" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Shape settings for a native visionOS 2D hover target.
+	</brief_description>
+	<description>
+		Assign this resource to [UIKitHoverEffect2D.style]. It selects the system effect and shape, and controls whether the target appears.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="enabled" type="bool" setter="set_enabled" getter="is_enabled" default="true">
+			Whether the hover target is visible.
+		</member>
+		<member name="corner_radius" type="float" setter="set_corner_radius" getter="get_corner_radius" default="-1.0">
+			Corner radius in Godot pixels when [member shape] is StyleBox. A negative value uses the Control's normal StyleBoxFlat radius, when available.
+		</member>
+		<member name="effect" type="int" setter="set_effect" getter="get_effect" default="0">
+			System effect: Highlight, Automatic, or Lift. UIKit may fall back when an effect is unavailable for a layer.
+		</member>
+		<member name="shape" type="int" setter="set_shape" getter="get_shape" default="0">
+			Target shape: StyleBox rounded rectangle, rectangle, capsule, or circle.
+		</member>
+	</members>
+</class>

@@ -1,0 +1,4 @@
+out/
+deps
+.sconsign.dblite
+GodotVisionOS/gen/

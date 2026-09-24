@@ -1,0 +1,151 @@
+import os
+import glob
+import shutil
+import subprocess
+import sys
+
+env = Environment(ENV=os.environ.copy())
+root = Dir('.').abspath
+deps_dir = os.path.join(root, 'deps')
+cpp_override = os.environ.get('GODOT_CPP_DIR')
+godot_override = os.environ.get('GODOT_DIR')
+cpp_dir = os.path.abspath(cpp_override or os.path.join(deps_dir, 'godot-cpp'))
+godot_dir = os.path.abspath(godot_override or os.path.join(deps_dir, 'godot'))
+platform = ARGUMENTS.get('platform', 'visionos')
+config = ARGUMENTS.get('config', 'debug').lower()
+
+if platform not in ('macos', 'visionos', 'visionos_simulator') or config not in ('debug', 'release'):
+    raise ValueError('platform must be macos, visionos or visionos_simulator; config must be debug or release')
+def read_deps_conf():
+    result = {}
+    with open(os.path.join(root, 'deps.conf'), encoding='utf-8') as source:
+        for line in source:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                key, value = line.split('=', 1)
+                result[key] = value
+    return result
+
+dependency_config = read_deps_conf()
+
+def prepare_checkout(name, destination):
+    if os.path.isdir(destination):
+        return
+    if os.path.lexists(destination):
+        raise RuntimeError('Dependency path is not a checkout: ' + destination)
+    url = os.environ.get(name + '_URL', dependency_config[name + '_URL'])
+    branch = os.environ.get(name + '_BRANCH', dependency_config[name + '_BRANCH'])
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    subprocess.check_call(['git', 'clone', '--branch', branch, '--single-branch', url, destination])
+
+def archive_name():
+    if platform == 'macos':
+        return 'libgodot-cpp.macos.' + ('editor' if config == 'debug' else 'template_release') + '.universal.a'
+    suffix = '.simulator' if platform == 'visionos_simulator' else ''
+    return 'libgodot-cpp.visionos.template_' + config + '.arm64' + suffix + '.a'
+
+def ensure_dependencies():
+    archive = os.path.join(cpp_dir, 'bin', archive_name())
+    if os.path.isfile(archive) and os.path.isfile(os.path.join(cpp_dir, 'doc_source_generator.py')):
+        return archive
+    if cpp_override:
+        raise RuntimeError('Missing pre-built GODOT_CPP_DIR archive: ' + archive)
+    prepare_checkout('GODOT', godot_dir)
+    prepare_checkout('GODOT_CPP', cpp_dir)
+    api = os.path.join(deps_dir, 'extension_api.json')
+    if not os.path.isfile(api):
+        editor = os.path.join(godot_dir, 'bin', 'godot.macos.editor.dev.arm64')
+        if not os.path.isfile(editor):
+            subprocess.check_call(['scons', 'platform=macos', 'target=editor', 'dev_build=yes', '-j8'], cwd=godot_dir)
+        subprocess.check_call([editor, '--dump-extension-api'], cwd=deps_dir)
+    args = ['scons', 'platform=macos' if platform == 'macos' else 'platform=visionos',
+            'target=' + ('editor' if platform == 'macos' and config == 'debug' else 'template_' + config),
+            'custom_api_file=' + api, 'use_hot_reload=no', '-j8']
+    if platform != 'macos':
+        args += ['arch=arm64', 'ios_simulator=' + ('yes' if platform == 'visionos_simulator' else 'no'),
+                 'visionos_min_version=26.0', 'custom_tools=' + os.path.join(root, 'tools')]
+    subprocess.check_call(args, cwd=cpp_dir)
+    if not os.path.isfile(archive):
+        raise RuntimeError('Dependency build did not produce: ' + archive)
+    return archive
+
+destinations = {
+    'macos': 'generic/platform=macOS',
+    'visionos': 'generic/platform=visionOS',
+    'visionos_simulator': 'generic/platform=visionOS Simulator',
+}
+products = {
+    'macos': config.capitalize(),
+    'visionos': config.capitalize() + '-xros',
+    'visionos_simulator': config.capitalize() + '-xrsimulator',
+}
+
+def build_framework(target, source, env):
+    derived = os.path.join(root, 'out', 'derived', platform, config)
+    archive = ensure_dependencies()
+    sys.path.insert(0, cpp_dir)
+    from doc_source_generator import generate_doc_source_from_directory
+    generated_dir = os.path.join(root, 'GodotVisionOS', 'gen')
+    os.makedirs(generated_dir, exist_ok=True)
+    generate_doc_source_from_directory(os.path.join(generated_dir, 'doc_data.gen.cpp'),
+                                       os.path.join(root, 'doc_classes'))
+    libraries = {
+        'macos': 'godot-cpp.macos.' + ('editor' if config == 'debug' else 'template_release') + '.universal',
+        'visionos': 'godot-cpp.visionos.template_' + config + '.arm64',
+        'visionos_simulator': 'godot-cpp.visionos.template_' + config + '.arm64.simulator',
+    }
+    subprocess.check_call([
+        'xcodebuild', 'build', '-project', os.path.join(root, 'GodotVisionOS', 'GodotVisionOS.xcodeproj'),
+        '-scheme', 'GodotVisionOS', '-configuration', config.capitalize(),
+        '-destination', destinations[platform], '-derivedDataPath', derived,
+        'GODOT_CPP_ROOT=' + cpp_dir,
+        'GODOT_CPP_MACOS_LIB=' + libraries['macos'],
+        'GODOT_CPP_VISIONOS_LIB=' + libraries['visionos'],
+        'GODOT_CPP_SIMULATOR_LIB=' + libraries['visionos_simulator'],
+    ])
+    built = os.path.join(derived, 'Build', 'Products', products[platform], 'GodotVisionOS.framework')
+    addon = os.path.join(root, 'out', 'addons', 'GodotVisionOS')
+    os.makedirs(addon, exist_ok=True)
+    shutil.copy2(os.path.join(root, 'etc', 'GodotVisionOS.gdextension'), addon)
+    if platform == 'macos':
+        folder = 'macos.editor' if config == 'debug' else 'macos.template_release'
+        output = os.path.join(addon, folder, 'GodotVisionOS.framework')
+        if os.path.exists(output):
+            shutil.rmtree(output)
+        shutil.copytree(built, output)
+        if config == 'debug':
+            link = os.path.join(addon, 'macos.template_debug')
+            if not os.path.lexists(link):
+                os.symlink('macos.editor', link)
+    else:
+        slices = os.path.join(root, 'out', 'slices', config)
+        os.makedirs(slices, exist_ok=True)
+        slice_dir = os.path.join(slices, platform)
+        os.makedirs(slice_dir, exist_ok=True)
+        slice_path = os.path.join(slice_dir, 'GodotVisionOS.framework')
+        if os.path.exists(slice_path):
+            shutil.rmtree(slice_path)
+        shutil.copytree(built, slice_path)
+        device = os.path.join(slices, 'visionos', 'GodotVisionOS.framework')
+        simulator = os.path.join(slices, 'visionos_simulator', 'GodotVisionOS.framework')
+        def has_swift_interface(framework):
+            return bool(glob.glob(os.path.join(framework, 'Modules', 'GodotVisionOS.swiftmodule', '*.swiftinterface')))
+        if has_swift_interface(device) and has_swift_interface(simulator):
+            folder = os.path.join(addon, 'visionos.template_' + config)
+            os.makedirs(folder, exist_ok=True)
+            output = os.path.join(folder, 'GodotVisionOS.xcframework')
+            if os.path.exists(output):
+                shutil.rmtree(output)
+            subprocess.check_call(['xcodebuild', '-create-xcframework', '-framework', device,
+                                   '-framework', simulator, '-output', output])
+    return 0
+
+builder = env.Command('out/framework_' + platform + '_' + config, [], build_framework)
+env.AlwaysBuild(builder)
+Default(builder)
+
+def build_dependencies(target, source, env):
+    ensure_dependencies()
+    return 0
+
+env.Alias('deps', env.Command('out/deps_' + platform + '_' + config, [], build_dependencies))

@@ -1,0 +1,4 @@
+framework module GodotVisionOS [system] {
+    header "GodotVisionOS.h"
+    export *
+}

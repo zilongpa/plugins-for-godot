@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VisionOSHoverRoot2D" inherits="Node" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Synchronizes a 2D Godot interface with native visionOS hover effects.
+	</brief_description>
+	<description>
+		Add this node below the CanvasLayer or Control containing the interface. It discovers visible, enabled buttons, ranges, text inputs, tabs, lists, trees, and scroll containers in that subtree and presents the system highlight when a person looks at them. A [UIKitHoverEffect2D] child on a Control opts that Control in or out and may supply a [VisionOSHoverStyle2D]. The root follows control transforms, clipping, opacity, and Godot GUI hit testing. It removes native targets when the node or window closes. Only native visionOS windows are supported.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_active_target_count" qualifiers="const">
+			<return type="int" />
+			<description>Returns the number of native hover targets currently tracked by this root.</description>
+		</method>
+		<method name="is_supported" qualifiers="const">
+			<return type="bool" />
+			<description>Returns whether native 2D hover is available in the running environment.</description>
+		</method>
+	</methods>
+	<members>
+		<member name="enabled" type="bool" setter="set_enabled" getter="is_enabled" default="true">
+			Enables scanning. Disabling removes all targets immediately.
+		</member>
+	</members>
+</class>

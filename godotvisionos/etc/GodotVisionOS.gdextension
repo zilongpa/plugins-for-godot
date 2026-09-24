@@ -1,0 +1,18 @@
+[configuration]
+
+entry_symbol = "godotvisionos_extension_init"
+compatibility_minimum = "4.7"
+initialize = true
+
+[libraries]
+
+macos.editor = "res://addons/GodotVisionOS/macos.editor/GodotVisionOS.framework"
+macos.debug = "res://addons/GodotVisionOS/macos.template_debug/GodotVisionOS.framework"
+macos.release = "res://addons/GodotVisionOS/macos.template_release/GodotVisionOS.framework"
+visionos.debug = "res://addons/GodotVisionOS/visionos.template_debug/GodotVisionOS.xcframework"
+visionos.release = "res://addons/GodotVisionOS/visionos.template_release/GodotVisionOS.xcframework"
+
+[dependencies]
+
+visionos.debug = { "res://addons/GodotVisionOS/visionos.template_debug/GodotVisionOS.xcframework": "" }
+visionos.release = { "res://addons/GodotVisionOS/visionos.template_release/GodotVisionOS.xcframework": "" }

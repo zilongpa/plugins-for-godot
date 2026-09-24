@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="UIKitHoverEffect2D" inherits="Node" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Overrides native visionOS hover for a single Control.
+	</brief_description>
+	<description>
+		Place this node directly below a Control scanned by [VisionOSHoverRoot2D]. It enables hover on a custom Control or disables the automatic target. The effect is visual; Godot still handles input.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="is_supported" qualifiers="const">
+			<return type="bool" />
+			<description>Returns whether the native effect is available.</description>
+		</method>
+	</methods>
+	<members>
+		<member name="enabled" type="bool" setter="set_enabled" getter="is_enabled" default="true">
+			Whether this Control is a native hover target.
+		</member>
+		<member name="style" type="VisionOSHoverStyle2D" setter="set_style" getter="get_style">
+			Optional effect shape and visibility settings.
+		</member>
+	</members>
+</class>

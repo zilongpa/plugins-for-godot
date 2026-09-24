@@ -1,0 +1,68 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* extension.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* extension.cpp */; };
+		A10000000000000000000002 /* visionos_hover_root_2d.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* visionos_hover_root_2d.cpp */; };
+		A10000000000000000000003 /* visionos_hover_style_2d.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* visionos_hover_style_2d.cpp */; };
+		A10000000000000000000004 /* uikit_hover_effect_2d.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* uikit_hover_effect_2d.cpp */; };
+		A10000000000000000000005 /* VisionOSHover.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* VisionOSHover.swift */; };
+		A10000000000000000000006 /* GodotVisionOS.h in Headers */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* GodotVisionOS.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		A10000000000000000000009 /* doc_data.gen.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* doc_data.gen.cpp */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* extension.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = extension.cpp; sourceTree = "<group>"; };
+		A20000000000000000000002 /* visionos_hover_root_2d.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = visionos_hover_root_2d.cpp; sourceTree = "<group>"; };
+		A20000000000000000000003 /* visionos_hover_style_2d.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = visionos_hover_style_2d.cpp; sourceTree = "<group>"; };
+		A20000000000000000000004 /* uikit_hover_effect_2d.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = uikit_hover_effect_2d.cpp; sourceTree = "<group>"; };
+		A20000000000000000000005 /* VisionOSHover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionOSHover.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* GodotVisionOS.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GodotVisionOS.h; sourceTree = "<group>"; };
+		A20000000000000000000007 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000008 /* GodotVisionOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = GodotVisionOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000009 /* doc_data.gen.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = gen/doc_data.gen.cpp; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {isa = PBXGroup; children = (A20000000000000000000001, A20000000000000000000002, A20000000000000000000003, A20000000000000000000004, A20000000000000000000005, A20000000000000000000006, A20000000000000000000007, A20000000000000000000009, A40000000000000000000002); sourceTree = "<group>"; };
+		A40000000000000000000002 /* Products */ = {isa = PBXGroup; children = (A20000000000000000000008); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		A30000000000000000000002 /* Headers */ = {isa = PBXHeadersBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000006); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* GodotVisionOS */ = {isa = PBXNativeTarget; buildConfigurationList = A70000000000000000000002; buildPhases = (A30000000000000000000002, A30000000000000000000003, A30000000000000000000001); buildRules = (); dependencies = (); name = GodotVisionOS; productName = GodotVisionOS; productReference = A20000000000000000000008; productType = "com.apple.product-type.framework"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A60000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {LastUpgradeCheck = 1700; TargetAttributes = {A50000000000000000000001 = {CreatedOnToolsVersion = 17.0; }; }; }; buildConfigurationList = A70000000000000000000001; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A40000000000000000000001; productRefGroup = A40000000000000000000002; projectDirPath = ""; projectRoot = ""; targets = (A50000000000000000000001); };
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000009); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A80000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000007; buildSettings = {GCC_OPTIMIZATION_LEVEL = 0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		A80000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000007; buildSettings = {SWIFT_OPTIMIZATION_LEVEL = "-O"; }; name = Release; };
+		A80000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000007; buildSettings = {}; name = Debug; };
+		A80000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000007; buildSettings = {}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A70000000000000000000001 /* Project configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000003, A80000000000000000000004); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A70000000000000000000002 /* Target configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001, A80000000000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = A60000000000000000000001;
+}
