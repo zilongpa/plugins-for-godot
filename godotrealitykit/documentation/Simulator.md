@@ -11,7 +11,7 @@ The default SCons/addon export flow still builds device libraries only.
 - A working Debug build of this plugin and its pinned Godot/godot-cpp dependencies
   following [Building](Building.md). The commands below run from `godotrealitykit/`
   and use the `deps` symlink created by the normal framework build.
-- Godot commit `30c244d4c51a6e019a824c8ebfd346847e2686ab`, as specified in `deps.conf`.
+- Godot commit `30ccda47f9980e47a7e1cd9c19943ab2a54362f4`, as specified in `deps.conf`.
 - An **isolated copy** of a Debug visionOS Xcode export. Packaging below replaces
   its plugin framework with a simulator-only framework; do not use that copy for
   device deployment or distribution.
@@ -30,7 +30,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 GDRK_ROOT="$PWD"
 GDRK_DEPS="$(cd deps && pwd)"
 
-test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = 30c244d4c51a6e019a824c8ebfd346847e2686ab
+test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = 30ccda47f9980e47a7e1cd9c19943ab2a54362f4
 
 scons -C "$GDRK_DEPS/godot" -j4 platform=visionos target=template_debug \
     simulator=yes arch=arm64 generate_bundle=no vulkan=false \
