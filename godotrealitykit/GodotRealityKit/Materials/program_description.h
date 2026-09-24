@@ -134,6 +134,8 @@ struct BaseMaterial3DDescription {
 	uint32_t distance_fade : godot::get_num_bits(BM::DISTANCE_FADE_OBJECT_DITHER - 0) = BM::DISTANCE_FADE_DISABLED;
 	uint32_t flags = 0;
 	uint32_t features = 0;
+	// Simulator samples non-MSDF LA8 font atlases as raw RG channels.
+	bool albedo_texture_is_la8_font_atlas = false;
 	bool use_depth_postpass = false;
 
 	inline bool get_flag(godot::BaseMaterial3D::Flags p_flag) const { return flags & (1 << p_flag); }
@@ -155,6 +157,7 @@ struct BaseMaterial3DDescription {
 		h = godot::hash_murmur3_one_32(distance_fade, h);
 		h = godot::hash_murmur3_one_32(flags, h);
 		h = godot::hash_murmur3_one_32(features, h);
+		h = godot::hash_murmur3_one_32(uint32_t(albedo_texture_is_la8_font_atlas), h);
 		h = godot::hash_murmur3_one_32(uint32_t(use_depth_postpass), h);
 		return h;
 	}
