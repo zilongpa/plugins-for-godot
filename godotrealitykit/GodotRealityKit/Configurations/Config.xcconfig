@@ -91,10 +91,10 @@ SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = NO
 // Default linker flags. SDK-conditional flags pick the matching godot-cpp library.
 OTHER_LDFLAGS =
 OTHER_LDFLAGS[sdk=macosx*] = -lgodot-cpp.macos.editor.universal -framework CoreHaptics
-GDRK_SIMULATOR_CONFIG[config=Debug] = debug
-GDRK_SIMULATOR_CONFIG[config=Release] = release
-OTHER_LDFLAGS[sdk=xrsimulator*] = -lgodot-cpp.visionos.template_$(GDRK_SIMULATOR_CONFIG).arm64.simulator -framework CoreHaptics
-OTHER_LDFLAGS[sdk=xros*] = -lgodot-cpp.visionos.template.arm64 -framework CoreHaptics
+GDRK_CPP_CONFIG[config=Debug] = debug
+GDRK_CPP_CONFIG[config=Release] = release
+OTHER_LDFLAGS[sdk=xrsimulator*] = -lgodot-cpp.visionos.template_$(GDRK_CPP_CONFIG).arm64.simulator -framework CoreHaptics
+OTHER_LDFLAGS[sdk=xros*] = -lgodot-cpp.visionos.template_$(GDRK_CPP_CONFIG).arm64 -framework CoreHaptics
 
 // Common preprocessor defines.
 // Each $(GDRK_..._DEFINE) below is empty unless the matching qualifier
