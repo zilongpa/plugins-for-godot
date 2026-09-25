@@ -12,6 +12,7 @@ class VisionOSHoverRoot2D : public godot::Node {
 	GDCLASS(VisionOSHoverRoot2D, godot::Node);
 
 	struct NativeTarget {
+		uint64_t native_id = 0;
 		int64_t controller = 0;
 		godot::Rect2 rect;
 		float radii[4] = {};
@@ -24,8 +25,8 @@ class VisionOSHoverRoot2D : public godot::Node {
 	bool enabled = true;
 	std::unordered_map<uint64_t, NativeTarget> active;
 
-	void scan(godot::Node *p_node, godot::Viewport *p_viewport, int64_t p_controller, std::unordered_set<uint64_t> &r_seen);
-	bool make_target(godot::Control *p_control, godot::Viewport *p_viewport, int64_t p_controller, NativeTarget &r_target) const;
+	void scan(godot::Node *p_node, godot::Viewport *p_viewport, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, std::unordered_set<uint64_t> &r_seen);
+	bool make_target(godot::Control *p_control, godot::Viewport *p_viewport, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, NativeTarget &r_target) const;
 	void clear_targets();
 
 protected:

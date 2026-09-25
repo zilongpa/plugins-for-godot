@@ -16,10 +16,10 @@
 			Corner radius in Godot pixels when [member shape] is StyleBox. A negative value uses the Control's normal StyleBoxFlat radius, when available.
 		</member>
 		<member name="effect" type="int" setter="set_effect" getter="get_effect" default="0">
-			System effect: Highlight, Automatic, or Lift. UIKit may fall back when an effect is unavailable for a layer.
+			System effect: Highlight, Automatic, or Lift. Automatic and Lift are requests to UIKit; they do not lift Godot-rendered content, and UIKit may fall back when an effect is unavailable for a layer.
 		</member>
 		<member name="shape" type="int" setter="set_shape" getter="get_shape" default="0">
-			Target shape: StyleBox rounded rectangle, rectangle, capsule, or circle.
+			Target shape: StyleBox rounded rectangle, rectangle, capsule, circle, or the system default. A partially clipped control requires StyleBox or Rectangle.
 		</member>
 	</members>
 </class>

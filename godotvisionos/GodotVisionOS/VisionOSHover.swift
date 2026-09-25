@@ -7,6 +7,7 @@ import UIKit
 private final class HoverTarget {
     weak var controller: UIViewController?
     let layer: UIHoverEffectLayer
+    private let content = CAShapeLayer()
     var pixels: CGRect = .zero
     var radii: [CGFloat] = [0, 0, 0, 0]
     var opacity: CGFloat = 1
@@ -22,28 +23,41 @@ private final class HoverTarget {
         self.controller = controller
         layer = UIHoverEffectLayer(containerView: controller.view,
                                    style: UIHoverStyle(effect: .highlight))
+        // UIHoverEffectLayer applies its effect to content sublayers. This subtle
+        // backing shape supplies content without copying Godot's Metal surface.
+        content.fillColor = UIColor.white.withAlphaComponent(0.01).cgColor
+        layer.addSublayer(content)
     }
 
-    func refresh() {
-        guard let view = controller?.viewIfLoaded,
-              let window = view.window,
-              window.windowScene?.activationState == .foregroundActive else {
+    @discardableResult
+    func refresh() -> Bool {
+        guard let view = controller?.viewIfLoaded else {
             layer.removeFromSuperlayer()
             lastFrame = nil
-            return
+            return false
+        }
+        guard let window = view.window else {
+            layer.removeFromSuperlayer()
+            lastFrame = nil
+            return true
+        }
+        guard window.windowScene?.activationState == .foregroundActive else {
+            layer.removeFromSuperlayer()
+            lastFrame = nil
+            return false
         }
         let scale = view.contentScaleFactor
         guard scale > 0 else {
             layer.removeFromSuperlayer()
             lastFrame = nil
-            return
+            return false
         }
         let frame = CGRect(x: pixels.minX / scale, y: pixels.minY / scale,
                            width: pixels.width / scale, height: pixels.height / scale)
         guard frame.width > 0 && frame.height > 0 else {
             layer.removeFromSuperlayer()
             lastFrame = nil
-            return
+            return false
         }
         if layer.superlayer === view.layer,
            lastFrame == frame,
@@ -51,7 +65,7 @@ private final class HoverTarget {
            lastOpacity == opacity,
            lastEffect == effect,
            lastShape == shape {
-            return
+            return false
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -61,15 +75,32 @@ private final class HoverTarget {
         }
         layer.frame = frame
         layer.opacity = Float(max(0, min(1, opacity)))
-        let hoverShape: UIShape
+        let bounds = CGRect(origin: .zero, size: frame.size)
+        let path: UIBezierPath
+        let hoverShape: UIShape?
         switch shape {
-        case 1: hoverShape = .rect
-        case 2: hoverShape = .capsule
-        case 3: hoverShape = .circle
+        case 1:
+            path = UIBezierPath(rect: bounds)
+            hoverShape = .rect
+        case 2:
+            path = UIBezierPath(roundedRect: bounds, cornerRadius: min(frame.width, frame.height) / 2)
+            hoverShape = .capsule
+        case 3:
+            let diameter = min(frame.width, frame.height)
+            path = UIBezierPath(ovalIn: CGRect(x: (frame.width - diameter) / 2,
+                                               y: (frame.height - diameter) / 2,
+                                               width: diameter, height: diameter))
+            hoverShape = .circle
+        case 4:
+            path = UIBezierPath(rect: bounds)
+            hoverShape = nil
         default:
-            let path = Self.roundedPath(size: frame.size, radii: radii.map { $0 / scale })
+            path = Self.roundedPath(size: frame.size, radii: radii.map { $0 / scale })
             hoverShape = .path(path)
         }
+        content.frame = layer.bounds
+        content.contentsScale = scale
+        content.path = path.cgPath
         switch effect {
         case 1: layer.hoverStyle = UIHoverStyle(effect: .automatic, shape: hoverShape)
         case 2: layer.hoverStyle = UIHoverStyle(effect: .lift, shape: hoverShape)
@@ -81,6 +112,7 @@ private final class HoverTarget {
         lastOpacity = opacity
         lastEffect = effect
         lastShape = shape
+        return false
     }
 
     private static func roundedPath(size: CGSize, radii: [CGFloat]) -> UIBezierPath {
@@ -108,7 +140,16 @@ private final class HoverTarget {
 private final class HoverRegistry: NSObject {
     static let shared = HoverRegistry()
     private var targets: [UInt64: HoverTarget] = [:]
-    private var timer: CADisplayLink?
+    private var pendingTimer: Timer?
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        for name in [UIScene.didActivateNotification, UIScene.willDeactivateNotification,
+                     UIWindow.didBecomeVisibleNotification, UIWindow.didBecomeHiddenNotification] {
+            center.addObserver(self, selector: #selector(refresh), name: name, object: nil)
+        }
+    }
 
     func update(id: UInt64, controller: UIViewController, rect: CGRect,
                 radii: [CGFloat], opacity: CGFloat, effect: Int32, shape: Int32) {
@@ -125,29 +166,32 @@ private final class HoverRegistry: NSObject {
         target.opacity = opacity
         target.effect = effect
         target.shape = shape
-        target.refresh()
-        if timer == nil {
-            timer = CADisplayLink(target: self, selector: #selector(refresh))
-            timer?.preferredFramesPerSecond = 30
-            timer?.add(to: .main, forMode: .common)
-        }
+        refresh()
     }
 
     @objc private func refresh() {
+        var needsRetry = false
         for (id, target) in Array(targets) {
             if target.controller == nil {
                 remove(id: id)
             } else {
-                target.refresh()
+                needsRetry = target.refresh() || needsRetry
             }
+        }
+        if needsRetry && pendingTimer == nil {
+            pendingTimer = Timer.scheduledTimer(timeInterval: 0.1, target: self,
+                                                selector: #selector(refresh), userInfo: nil, repeats: true)
+        } else if !needsRetry {
+            pendingTimer?.invalidate()
+            pendingTimer = nil
         }
     }
 
     func remove(id: UInt64) {
         targets.removeValue(forKey: id)?.layer.removeFromSuperlayer()
         if targets.isEmpty {
-            timer?.invalidate()
-            timer = nil
+            pendingTimer?.invalidate()
+            pendingTimer = nil
         }
     }
 }

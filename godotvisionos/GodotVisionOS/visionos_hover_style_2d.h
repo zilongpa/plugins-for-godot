@@ -18,6 +18,7 @@ public:
 		SHAPE_RECT,
 		SHAPE_CAPSULE,
 		SHAPE_CIRCLE,
+		SHAPE_SYSTEM,
 	};
 
 private:

@@ -24,10 +24,11 @@ void VisionOSHoverStyle2D::_bind_methods() {
 	BIND_ENUM_CONSTANT(SHAPE_RECT);
 	BIND_ENUM_CONSTANT(SHAPE_CAPSULE);
 	BIND_ENUM_CONSTANT(SHAPE_CIRCLE);
+	BIND_ENUM_CONSTANT(SHAPE_SYSTEM);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "enabled"), "set_enabled", "is_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "corner_radius", PROPERTY_HINT_RANGE, "-1,128,0.5,or_greater"), "set_corner_radius", "get_corner_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "effect", PROPERTY_HINT_ENUM, "Highlight,Automatic,Lift"), "set_effect", "get_effect");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape", PROPERTY_HINT_ENUM, "StyleBox,Rectangle,Capsule,Circle"), "set_shape", "get_shape");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape", PROPERTY_HINT_ENUM, "StyleBox,Rectangle,Capsule,Circle,System"), "set_shape", "get_shape");
 }
 
 void VisionOSHoverStyle2D::set_corner_radius(float p_radius) {
@@ -43,7 +44,7 @@ void VisionOSHoverStyle2D::set_effect(int p_effect) {
 }
 
 void VisionOSHoverStyle2D::set_shape(int p_shape) {
-	if (p_shape >= SHAPE_STYLEBOX && p_shape <= SHAPE_CIRCLE) {
+	if (p_shape >= SHAPE_STYLEBOX && p_shape <= SHAPE_SYSTEM) {
 		shape = p_shape;
 	}
 }

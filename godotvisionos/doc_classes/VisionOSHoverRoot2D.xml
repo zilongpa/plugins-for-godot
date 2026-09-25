@@ -4,7 +4,7 @@
 		Synchronizes a 2D Godot interface with native visionOS hover effects.
 	</brief_description>
 	<description>
-		Add this node below the CanvasLayer or Control containing the interface. It discovers visible, enabled buttons, ranges, text inputs, tabs, lists, trees, and scroll containers in that subtree and presents the system highlight when a person looks at them. A [UIKitHoverEffect2D] child on a Control opts that Control in or out and may supply a [VisionOSHoverStyle2D]. The root follows control transforms, clipping, opacity, and Godot GUI hit testing. It removes native targets when the node or window closes. Only native visionOS windows are supported.
+		Add this node below the CanvasLayer or Control containing the interface. It discovers visible, enabled buttons, sliders, scroll bars, spin boxes, and text inputs. Add a [UIKitHoverEffect2D] child to opt a custom Control in or an automatic target out, and optionally supply a [VisionOSHoverStyle2D]. List, tree, tab, and scroll containers are not automatic targets. The root follows axis-aligned control transforms, partial rectangular clipping, opacity, and Godot GUI hit testing. Unsupported rotation, skew, and complex hit regions do not create native targets. It removes targets when the node or window closes. Only native visionOS windows are supported.
 	</description>
 	<tutorials>
 	</tutorials>
