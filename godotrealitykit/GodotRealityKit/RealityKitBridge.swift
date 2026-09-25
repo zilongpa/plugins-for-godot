@@ -841,22 +841,116 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: GodotViewController, context: Context) {}
 }
 
+@MainActor private enum Godot2DWindowRequests {
+    static var opened = Set<UInt64>()
+}
+
+@MainActor private enum GodotSceneVisibility {
+    static var foregroundScenes = Set<UUID>()
+
+    static func update(_ id: UUID, phase: ScenePhase) {
+        if phase == .background {
+            foregroundScenes.remove(id)
+        } else {
+            foregroundScenes.insert(id)
+        }
+        Bridge.sceneVisible = !foregroundScenes.isEmpty
+    }
+
+    static func remove(_ id: UUID) {
+        foregroundScenes.remove(id)
+        Bridge.sceneVisible = !foregroundScenes.isEmpty
+    }
+}
+
+private struct GodotSceneVisibilityBridge: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { GodotSceneVisibility.update(id, phase: scenePhase) }
+            .onDisappear { GodotSceneVisibility.remove(id) }
+            .onChange(of: scenePhase) { _, phase in
+                GodotSceneVisibility.update(id, phase: phase)
+            }
+    }
+}
+
+private struct Godot2DWindowRequestBridge: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("org.godotengine.visionos.openWindow"))) { notification in
+                guard let id = notification.object as? UInt64,
+                      Godot2DWindowRequests.opened.insert(id).inserted else { return }
+                openWindow(id: "godot-2d", value: id)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("org.godotengine.visionos.closeWindow"))) { notification in
+                guard let id = notification.object as? UInt64 else { return }
+                Godot2DWindowRequests.opened.remove(id)
+            }
+    }
+}
+
+private struct Godot2DWindowController: UIViewControllerRepresentable {
+    let id: UInt64
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        guard let controllerType = NSClassFromString("GDTViewController") as? UIViewController.Type else {
+            assertionFailure("Godot 2D window controller is unavailable")
+            return UIViewController()
+        }
+        let controller = controllerType.init(nibName: nil, bundle: nil)
+        controller.setValue(NSNumber(value: id), forKey: "godotWindowID")
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIViewController, context: Context) {}
+}
+
+private struct Godot2DWindow: View {
+    let id: UInt64
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Godot2DWindowController(id: id)
+            .ignoresSafeArea()
+            .onAppear {
+                if !Godot2DWindowRequests.opened.contains(id) { dismiss() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("org.godotengine.visionos.closeWindow"))) { notification in
+                if notification.object as? UInt64 == id {
+                    Godot2DWindowRequests.opened.remove(id)
+                    dismiss()
+                }
+            }
+    }
+}
+
 class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
     static var rootScene: some SwiftUI.Scene {
         WindowGroup(id: ScenePresentationStyle.sharedVolumetric.rawValue) {
             SharedVolumetricRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}
+            .modifier(Godot2DWindowRequestBridge())
+            .modifier(GodotSceneVisibilityBridge())
         }
         .windowStyle(.volumetric)
         .restorationBehavior(.disabled)
         WindowGroup(id: ScenePresentationStyle.sharedPortal.rawValue) {
             PortalRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}
+            .modifier(Godot2DWindowRequestBridge())
+            .modifier(GodotSceneVisibilityBridge())
         }
         .restorationBehavior(.disabled)
         ImmersiveSpace(id: ScenePresentationStyle.immersive.rawValue) {
             ImmersiveRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}
+            .modifier(Godot2DWindowRequestBridge())
+            .modifier(GodotSceneVisibilityBridge())
         }
         .immersionStyle(selection: Binding(get: {
             switch Bridge.immersionStyle {
@@ -866,6 +960,14 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
             }
         }, set: { _ in }), in: .mixed, .full, .progressive)
         .restorationBehavior(.disabled)
+        WindowGroup("Godot 2D", id: "godot-2d", for: UInt64.self) { id in
+            if let value = id.wrappedValue {
+                Godot2DWindow(id: value)
+                    .modifier(GodotSceneVisibilityBridge())
+            }
+        }
+        .defaultSize(width: 960, height: 600)
+        .restorationBehavior(.disabled)
     }
 
     public func scene(
@@ -873,10 +975,6 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-    }
-
-    public func sceneWillEnterForeground(_ scene: UIScene) {
-        Bridge.sceneVisible = true
     }
 
     public func sceneDidBecomeActive(_ scene: UIScene) {
@@ -891,9 +989,6 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
         }
     }
 
-    public func sceneDidEnterBackground(_ scene: UIScene) {
-        Bridge.sceneVisible = false
-    }
 }
 
 #else

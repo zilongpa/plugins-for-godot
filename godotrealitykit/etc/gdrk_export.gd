@@ -33,10 +33,13 @@ func _get_export_options_overrides(platform: EditorExportPlatform) -> Dictionary
 	if platform is not EditorExportPlatformVisionOS:
 		return {}
 	else:
-		return {
-			"custom_template/debug": "./addons/GodotRealityKit/visionos.template_debug/godot_visionos.zip",
-			"custom_template/release": "./addons/GodotRealityKit/visionos.template_release/godot_visionos.zip"
-		}
+		var preset := get_export_preset()
+		var overrides := {}
+		for configuration in ["debug", "release"]:
+			var option: String = "custom_template/" + configuration
+			if preset == null or String(preset.get(option)).is_empty():
+				overrides[option] = "./addons/GodotRealityKit/visionos.template_%s/godot_visionos.zip" % configuration
+		return overrides
 
 func _export_begin(features: PackedStringArray, is_debug: bool, path: String, flags: int) -> void:
 	_pending_visionos_path = path if features.has("visionos") else ""
