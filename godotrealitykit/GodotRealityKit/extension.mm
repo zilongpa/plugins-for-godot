@@ -64,6 +64,7 @@ void initialize_gdrk_module(godot::ModuleInitializationLevel p_level) {
 		GDREGISTER_RUNTIME_CLASS(MeshLoader);
 		GDREGISTER_RUNTIME_CLASS(MultiMeshLoader);
 		GDREGISTER_RUNTIME_CLASS(ShapeLoader);
+		GDREGISTER_RUNTIME_CLASS(SkeletonLoader);
 		GDREGISTER_RUNTIME_CLASS(NodeLoaders);
 		GDREGISTER_RUNTIME_CLASS(RealityControllerXRInterface);
 		GDREGISTER_CLASS(RealityVolumeCamera3D);
@@ -100,8 +101,7 @@ void main_loop_frame() {
 		return;
 	}
 
-	SceneLoader *loader = reality_scene_tree->get_loader();
-	loader->update();
+	reality_scene_tree->update_loaders();
 }
 
 } // namespace gdrk
@@ -273,6 +273,7 @@ void GDRKBridgeDelegate::initialize_phase_manager() const {
 }
 
 void GDRKBridgeDelegate::setPHASETransform(GDRKTransform gdrk_transform) const {
+	if (loader->get_nodes()->window_scene_root) { return; }
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		initialize_phase_manager();
@@ -532,12 +533,20 @@ void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransfor
 			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
 			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
 
-	controller_interface->set_anchor_pose(hand, pose, p_tracked);
+	auto *window_root = loader->get_nodes()->window_scene_root;
+	controller_interface->set_anchor_pose(hand, pose, p_tracked, window_root ? window_root->get_instance_id() : 0);
 }
 
 void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {
 	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
-	if (controller_interface == nullptr || p_gc_controller == nullptr) {
+	if (controller_interface == nullptr) {
+		return;
+	}
+	if (p_gc_controller == nullptr) {
+		const auto hand = p_hand == kLeftHand
+				? godot::XRPositionalTracker::TRACKER_HAND_LEFT
+				: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
+		controller_interface->set_controller_input(hand, {}, nullptr);
 		return;
 	}
 

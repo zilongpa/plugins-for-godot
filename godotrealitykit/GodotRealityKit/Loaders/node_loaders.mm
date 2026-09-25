@@ -48,6 +48,13 @@ NodeLoaders::NodeLoaders() :
 }
 
 void NodeLoaders::node_added(godot::Node *p_node) {
+	if (window_scene_root) {
+		if (p_node != window_scene_root && !window_scene_root->is_ancestor_of(p_node)) { return; }
+	} else {
+		for (godot::Node *ancestor = p_node; ancestor; ancestor = ancestor->get_parent()) {
+			if (ancestor->has_meta("_gdrk_window_root")) { return; }
+		}
+	}
 	const uint64_t node_id = p_node->get_instance_id();
 	node_id_to_topo_priority.insert(node_id, next_topo_priority++);
 
@@ -74,6 +81,7 @@ void NodeLoaders::node_added(godot::Node *p_node) {
 
 void NodeLoaders::node_removed(godot::Node *p_node) {
 	const uint64_t node_id = p_node->get_instance_id();
+	if (!node_id_to_topo_priority.has(node_id)) { return; }
 	node_id_to_topo_priority.erase(node_id);
 
 	if (p_node->has_meta("_gdrk_skip") && p_node->get_meta("_gdrk_skip")) {

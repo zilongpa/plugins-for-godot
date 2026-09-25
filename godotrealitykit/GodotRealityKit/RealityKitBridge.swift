@@ -457,22 +457,154 @@ struct ImmersiveRealityView : View {
     }
 }
 
+// Explicit ARKit ownership gives us provider lifecycle events and valid tracking states.
+// SpatialTrackingSession is not also run for these controllers: one owner publishes poses.
+@MainActor
+final class SharedAccessoryTracking {
+    static let shared = SharedAccessoryTracking()
+    private var clients = 0
+    private var worker: Task<Void, Never>?
+    func acquire() {
+        clients += 1
+        guard clients == 1 else { return }
+        let previous = worker
+        worker = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await self.run()
+        }
+    }
+    func release() {
+        clients = max(0, clients - 1)
+        if clients == 0 { worker?.cancel() }
+    }
+    private let session = ARKitSession()
+    private(set) var anchors: [ControllerHand: AccessoryAnchor] = [:]
+    private(set) var controllers: [ControllerHand: GCController] = [:]
+    private(set) var running = false
+    private var provider: AccessoryTrackingProvider?
+    private var anchorTask: Task<Void, Never>?
+    private var trackingStates: [ControllerHand: String] = [:]
+
+    func run() async {
+        guard AccessoryTrackingProvider.isSupported else {
+            NSLog("[GDRK Tracking] AccessoryTrackingProvider unsupported")
+            return
+        }
+        let events = Task { @MainActor [weak self, session] in
+            for await event in session.events {
+                guard !Task.isCancelled else { break }
+                guard let self else { break }
+                switch event {
+                case .dataProviderStateChanged(_, let state, let error):
+                    // Use our current provider state; an old provider can stop on reconnect.
+                    self.running = self.provider?.state == .running
+                    if !self.running { self.anchors.removeAll() }
+                    NSLog("[GDRK Tracking] provider event=\(state) current=\(String(describing: self.provider?.state)) error=\(String(describing: error))")
+                case .authorizationChanged(let type, let status):
+                    NSLog("[GDRK Tracking] authorization \(type)=\(status)")
+                default: break
+                }
+            }
+        }
+        defer {
+            events.cancel()
+            anchorTask?.cancel()
+            session.stop()
+            provider = nil
+            running = false
+            anchors.removeAll()
+            controllers.removeAll()
+        }
+        var previous: Set<ObjectIdentifier>? = nil
+        // Polling also handles controllers already connected before notification registration.
+        // Reconfiguration is serialized, so two connects cannot race session.run().
+        while !Task.isCancelled {
+            let connected = GCController.controllers().filter {
+                $0.productCategory == GCProductCategorySpatialController
+            }
+            let identities = Set(connected.map(ObjectIdentifier.init))
+            if identities != previous {
+                previous = identities
+                anchorTask?.cancel()
+                session.stop()
+                running = false
+                anchors.removeAll()
+                controllers.removeAll()
+                trackingStates.removeAll()
+                var accessories: [Accessory] = []
+                for controller in connected {
+                    do {
+                        let accessory = try await Accessory(device: controller)
+                        guard !Task.isCancelled else { return }
+                        let hand: ControllerHand
+                        switch accessory.inherentChirality {
+                        case .left: hand = .leftHand
+                        case .right: hand = .rightHand
+                        default: continue
+                        }
+                        accessories.append(accessory)
+                        controllers[hand] = controller
+                        NSLog("[GDRK Tracking] configured \(controller.vendorName ?? "controller") hand=\(hand)")
+                    } catch {
+                        NSLog("[GDRK Tracking] accessory load failed: \(error)")
+                    }
+                }
+                if !accessories.isEmpty {
+                    let next = AccessoryTrackingProvider(accessories: accessories)
+                    provider = next
+                    do {
+                        try await session.run([next])
+                        guard !Task.isCancelled else { return }
+                        running = next.state == .running
+                        NSLog("[GDRK Tracking] session.run returned; provider=\(next.state), accessories=\(accessories.count)")
+                        anchorTask = Task { @MainActor [weak self] in
+                            for await update in next.anchorUpdates {
+                                guard !Task.isCancelled else { break }
+                                guard let self else { break }
+                                self.running = next.state == .running
+                                let hand: ControllerHand
+                                switch update.anchor.accessory.inherentChirality {
+                                case .left: hand = .leftHand
+                                case .right: hand = .rightHand
+                                default: continue
+                                }
+                                let status = "\(update.event):\(update.anchor.trackingState)"
+                                if self.trackingStates[hand] != status {
+                                    self.trackingStates[hand] = status
+                                    NSLog("[GDRK Tracking] hand=\(hand) anchor=\(status)")
+                                }
+                                switch update.event {
+                                case .added, .updated:
+                                    self.anchors[hand] = update.anchor
+                                case .removed:
+                                    self.anchors.removeValue(forKey: hand)
+                                }
+                            }
+                        }
+                    } catch {
+                        NSLog("[GDRK Tracking] session.run failed: \(error)")
+                    }
+                } else {
+                    provider = nil
+                    NSLog("[GDRK Tracking] no spatial accessories to run")
+                }
+            }
+            do { try await Task.sleep(for: .milliseconds(500)) }
+            catch { break }
+        }
+    }
+}
+
+@MainActor
 class SharedVolumetricRealityViewState {
     var lastCameraTransform: Transform? = nil
     var lastViewBounds: BoundingBox? = nil
     var lastScale: Float? = nil
-
-    // Spatial-accessory anchoring state.
-    var spatialTrackingSession: SpatialTrackingSession? = nil
-    var connectObserver: NSObjectProtocol? = nil
-    var pendingControllers: [GCController] = []
-    // An AnchorEntity(.accessory) resolves asynchronously, but content.add() has to run
-    // synchronously in the update closure, so resolved anchors wait here until the next tick.
-    var resolvedAnchors: [ControllerHand: AnchorEntity] = [:]
-    var anchors: [ControllerHand: AnchorEntity] = [:]
-    // The GCController anchored per hand, polled each frame for button / thumbstick input.
-    var controllers: [ControllerHand: GCController] = [:]
-    var trackingStarted: Bool = false
+    let tracking = SharedAccessoryTracking.shared
+    var trackingLease: UUID?
+    var lastPoseLog: TimeInterval = 0
+    var poseStatus: [ControllerHand: String] = [:]
 }
 
 // Shows the Godot scene in a volumetric window.
@@ -480,12 +612,13 @@ class SharedVolumetricRealityViewState {
 // scaled to fit the volumetric window.
 // otherwise it scales down the whole world to fit in the volumetric window
 struct SharedVolumetricRealityView : View {
+    @Environment(\.scenePhase) private var scenePhase
     let root: RealityKit.Entity
     let delegate: GDRKBridgeDelegate?
 
-    let anchor = RealityKit.Entity()
+    @State private var anchor = RealityKit.Entity()
 
-    let state = SharedVolumetricRealityViewState()
+    @State private var state = SharedVolumetricRealityViewState()
 
     @State private var subscription: EventSubscription? = nil
 
@@ -500,130 +633,71 @@ struct SharedVolumetricRealityView : View {
                    let viewBounds = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
                    self.updateCamera(viewBounds: viewBounds)
                    self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
-                   self.updateAccessoryAnchors(content: content)
             })
              .installGestures(delegate: self.delegate, root: self.root, size: proxy.size)
             .realityViewLayoutBehavior(.flexible)
             .setupProjectSettings(from: delegate)
-        }
-    }
-
-    // Keeps an AnchorEntity(.accessory) attached to each connected spatial controller. Runs only
-    // while the engine's shared-volume controller interface is live, which is what keeps
-    // accessory tracking off in other presentation styles and when controller tracking is
-    // disabled.
-    private func updateAccessoryAnchors(content: RealityViewContent) {
-        guard self.delegate?.wantsControllerAnchors() ?? false else { return }
-
-        self.startAccessoryTrackingIfNeeded()
-
-        for (hand, anchor) in self.state.resolvedAnchors {
-            // Each connect gives the controller a new accessory identity, so the newest resolved
-            // anchor replaces what is installed; the one it replaces can no longer track.
-            if let stale = self.state.anchors[hand] {
-                content.remove(stale)
-            }
-            content.add(anchor)
-            self.state.anchors[hand] = anchor
-        }
-        self.state.resolvedAnchors.removeAll()
-
-        self.resolvePendingControllers()
-    }
-
-    // Starts the accessory tracking session and queues the spatial controllers for anchoring;
-    // an AnchorEntity(.accessory) only resolves once a live session is running.
-    private func startAccessoryTrackingIfNeeded() {
-        guard !self.state.trackingStarted else { return }
-        self.state.trackingStarted = true
-
-        Task { @MainActor in
-            let session = SpatialTrackingSession()
-            _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
-            self.state.spatialTrackingSession = session
-        }
-
-        self.state.connectObserver = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name.GCControllerDidConnect,
-            object: nil,
-            queue: .main
-        ) { notification in
-            guard let controller = notification.object as? GCController,
-                  controller.productCategory == GCProductCategorySpatialController else { return }
-            self.state.pendingControllers.append(controller)
-        }
-
-        for controller in GCController.controllers()
-        where controller.productCategory == GCProductCategorySpatialController {
-            self.state.pendingControllers.append(controller)
-        }
-    }
-
-    // Resolves an anchoring source per queued controller and stages the resulting anchor for the
-    // next update tick.
-    private func resolvePendingControllers() {
-        guard !self.state.pendingControllers.isEmpty else { return }
-        let controllers = self.state.pendingControllers
-        self.state.pendingControllers.removeAll()
-
-        for controller in controllers {
-            Task { @MainActor in
-                do {
-                    let source = try await AnchoringComponent.AccessoryAnchoringSource(device: controller)
-                    guard let hand = Self.hand(of: source) else {
-                        NSLog("[GDRK] accessory anchor: controller reports no chirality; ignoring")
-                        return
+            .task(id: scenePhase) {
+                guard scenePhase != .background, self.delegate?.wantsControllerAnchors() ?? false else { return }
+                let lease = UUID()
+                self.state.trackingLease = lease
+                self.state.tracking.acquire()
+                defer {
+                    if self.state.trackingLease == lease {
+                        self.state.trackingLease = nil
+                        for hand in [ControllerHand.leftHand, .rightHand] {
+                            self.delegate?.setControllerAnchor(hand, GDRKTransform(scale: .one, position: .zero, orientation: simd_quatf()), false)
+                        }
                     }
-                    // The startup scan and the connect notification can queue the same controller
-                    // twice, so bail if this device is anchored — but let a different one replace it.
-                    if let anchored = self.state.controllers[hand], anchored === controller {
-                        return
-                    }
-                    guard let location = source.locationName(named: "grip") else {
-                        NSLog("[GDRK] accessory anchor: no 'grip' location for controller")
-                        return
-                    }
-                    self.state.resolvedAnchors[hand] = AnchorEntity(.accessory(from: source, location: location),
-                                                                    trackingMode: .predicted)
-                    self.state.controllers[hand] = controller
-                } catch {
-                    NSLog("[GDRK] AccessoryAnchoringSource init failed: \(error)")
+                    self.state.tracking.release()
+                }
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { break }
                 }
             }
         }
     }
 
-    // Spatial controllers come as a handed pair, so the accessory's inherent chirality is the
-    // hand it is held in.
-    private static func hand(of source: AnchoringComponent.AccessoryAnchoringSource) -> ControllerHand? {
-        switch source.underlyingAccessory?.inherentChirality {
-        case .left: return .leftHand
-        case .right: return .rightHand
-        default: return nil
-        }
-    }
-
-    // Pushes each anchored controller's scene-root-local transform to the engine, once per frame.
+    // CoordinateSpace3D conversion includes the volume camera's world scale/rotation.
+    // Raw ARKit world transforms must never be sent directly to Godot scene-local trackers.
     private func publishControllerPoses() {
-        guard let delegate = self.delegate, !self.state.anchors.isEmpty else { return }
-
-        for (hand, anchor) in self.state.anchors {
-            let t = Transform(matrix: anchor.transformMatrix(relativeTo: self.root))
+        guard state.trackingLease != nil, let delegate, delegate.wantsControllerAnchors() else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        let logPose = now - state.lastPoseLog >= 1
+        if logPose { state.lastPoseLog = now }
+        for hand in [ControllerHand.leftHand, .rightHand] {
+            var pose = Transform()
+            var status = "no anchor"
+            var tracked = false
+            if let accessoryAnchor = state.tracking.anchors[hand] {
+                status = String(describing: accessoryAnchor.trackingState)
+                if state.tracking.running && accessoryAnchor.trackingState == .positionOrientationTracked {
+                    do {
+                        let gripSpace = accessoryAnchor.coordinateSpace(for: .grip, correction: .none)
+                        let local = try self.root.transform(from: gripSpace)
+                        pose = Transform(matrix: local.matrix)
+                        tracked = true
+                        status = "tracked"
+                    } catch {
+                        status = "coordinate conversion failed: \(error)"
+                    }
+                }
+            }
             delegate.setControllerAnchor(hand, GDRKTransform(
-                scale: t.scale,
-                position: t.translation,
-                orientation: t.rotation
-            ), anchor.isAnchored)
+                scale: pose.scale, position: pose.translation, orientation: pose.rotation
+            ), tracked)
+            if state.poseStatus[hand] != status || (tracked && logPose) {
+                state.poseStatus[hand] = status
+                NSLog("[GDRK Tracking] Godot hand=\(hand) status=\(status) position=\(pose.translation) quaternion=\(pose.rotation.vector)")
+            }
         }
     }
 
-    // Pushes each anchored controller to the engine once per frame; the engine samples its
-    // buttons / thumbstick (via GameController) so XRController3D's button_pressed keeps working.
     private func publishControllerInputs() {
-        guard let delegate = self.delegate, !self.state.controllers.isEmpty else { return }
-
-        for (hand, controller) in self.state.controllers {
-            delegate.setControllerInput(hand, Unmanaged.passUnretained(controller).toOpaque())
+        guard state.trackingLease != nil, let delegate, delegate.wantsControllerAnchors() else { return }
+        for hand in [ControllerHand.leftHand, .rightHand] {
+            let pointer = state.tracking.controllers[hand].map { Unmanaged.passUnretained($0).toOpaque() }
+            delegate.setControllerInput(hand, pointer)
         }
     }
 
@@ -733,6 +807,8 @@ class LoadingViewController: UIViewController {
 }
 
 class GodotViewController: UIViewController {
+    private static var activeControllers: [GodotViewController] = []
+    private static var drawing = false
     let godotViewController: UIViewController? = Bridge.originalViewController
 
     var displayLink: CADisplayLink? = nil
@@ -744,23 +820,21 @@ class GodotViewController: UIViewController {
     }
 
     func startRendering() {
-        if self.isActive {
-            return
-        }
-
+        guard !self.isActive, let godotView = godotViewController?.view else { return }
         self.isActive = true
-
-        if let godotView = godotViewController?.view {
-            displayLink = CADisplayLink(target: self, selector: #selector(update))
-            if let framerate = godotView.value(forKey: "preferredFrameRate") as? Int {
-                displayLink?.preferredFramesPerSecond = framerate
-            }
-            displayLink?.add(to: .current, forMode: .common)
+        Self.activeControllers.append(self)
+        displayLink = CADisplayLink(target: self, selector: #selector(update))
+        if let framerate = godotView.value(forKey: "preferredFrameRate") as? Int {
+            displayLink?.preferredFramesPerSecond = framerate
         }
+        displayLink?.add(to: .current, forMode: .common)
+        displayLink?.isPaused = Self.activeControllers.first !== self
     }
 
     @objc
     func update() {
+        guard Self.activeControllers.first === self, !Self.drawing else { return }
+        Self.drawing = true
         // The problem: inside drawView, Godot temporarily hands control back to the system's main
         // run loop (the mechanism iOS uses to process events like touches, timers, and other
         // callbacks while an app is idle) so that any input events waiting to be delivered get
@@ -776,6 +850,10 @@ class GodotViewController: UIViewController {
         // its own, so it can't fire again while we're still inside drawView. Resume it once
         // drawView returns.
         displayLink?.isPaused = true
+        defer {
+            Self.drawing = false
+            if Self.activeControllers.first === self { displayLink?.isPaused = false }
+        }
 
         if let godotView = godotViewController?.view {
             // If the view was active, it means that the a display link is installed to update the
@@ -800,7 +878,6 @@ class GodotViewController: UIViewController {
             godotView.setValue(false, forKey: "isActive")
         }
 
-        displayLink?.isPaused = false
     }
 
     func stopRendering() {
@@ -809,8 +886,11 @@ class GodotViewController: UIViewController {
         }
 
         self.isActive = false
-
+        let wasDriver = Self.activeControllers.first === self
+        Self.activeControllers.removeAll { $0 === self }
         self.displayLink?.invalidate()
+        self.displayLink = nil
+        if wasDriver { Self.activeControllers.first?.displayLink?.isPaused = false }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -839,6 +919,10 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: GodotViewController, context: Context) {}
+
+    static func dismantleUIViewController(_ uiViewController: GodotViewController, coordinator: ()) {
+        uiViewController.stopRendering()
+    }
 }
 
 @MainActor private enum Godot2DWindowRequests {
@@ -926,6 +1010,35 @@ private struct Godot2DWindow: View {
                     dismiss()
                 }
             }
+    }
+}
+
+@MainActor
+final class AdditionalVolumeRecord {
+    let root: RealityKit.Entity
+    let delegate: GDRKBridgeDelegate
+    let title: String
+    init(root: RealityKit.Entity, delegate: GDRKBridgeDelegate, title: String) {
+        self.root = root; self.delegate = delegate; self.title = title
+    }
+}
+
+class AdditionalVolumeScene: NSObject, @MainActor UIHostingSceneDelegate {
+    static var rootScene: some SwiftUI.Scene {
+        WindowGroup("Godot 3D", id: "gdrk-extra-volume", for: UInt64.self) { $id in
+            if let id, let record = Bridge.additionalVolumes[id] {
+                SharedVolumetricRealityView(root: record.root, delegate: record.delegate)
+                    .overlay { GodotViewControllerRepresentable() }
+                    .ornament(attachmentAnchor: .scene(.bottom)) {
+                        Text(record.title).padding(12).glassBackgroundEffect()
+                    }
+                    .modifier(Godot2DWindowRequestBridge())
+                    .modifier(GodotSceneVisibilityBridge())
+                    .onAppear { NSLog("[GDRK Windows] visible id=\(id) title=\(record.title) root=\(record.root.id)") }
+            }
+        }
+        .windowStyle(.volumetric)
+        .restorationBehavior(.disabled)
     }
 }
 
@@ -1062,6 +1175,25 @@ public class Bridge {
     @MainActor static var bootSplashImage: UIImage? = nil
     @MainActor static var bootSplashBgColor: UIColor = .black
     @MainActor static var audioInterruptionObserver: Any? = nil
+    #endif
+
+    #if !os(macOS)
+    @MainActor static var additionalVolumes: [UInt64: AdditionalVolumeRecord] = [:]
+    public static func openVolumeWindow(_ root: Entity, _ delegate: GDRKBridgeDelegate, _ id: UInt64, _ title: String) {
+        assumeMainActor(root, delegate, id, title) { root, delegate, id, title in
+            additionalVolumes[id] = AdditionalVolumeRecord(root: root.value, delegate: delegate, title: title)
+            reopenVolumeWindow(id)
+        }
+    }
+    public static func reopenVolumeWindow(_ id: UInt64) {
+        assumeMainActor(id) { id in
+            guard additionalVolumes[id] != nil,
+                  let request = UISceneSessionActivationRequest(hostingDelegateClass: AdditionalVolumeScene.self, id: "gdrk-extra-volume", value: id) else { return }
+            UIApplication.shared.activateSceneSession(for: request) { error in
+                NSLog("[GDRK Windows] open failed: %@", error.localizedDescription)
+            }
+        }
+    }
     #endif
 
     public init() {}

@@ -94,6 +94,14 @@ func _export_end() -> void:
 			"NSAccessoryTrackingUsageDescription",
 			"Used to track spatial controllers for interacting with content."
 		)
+	if controller_tracking_enabled and not contents.contains("<string>SpatialGamepad</string>"):
+		var profile := "<dict><key>ProfileName</key><string>SpatialGamepad</string></dict>"
+		if contents.contains("<key>GCSupportedGameControllers</key>"):
+			var supported := RegEx.new()
+			supported.compile("(<key>GCSupportedGameControllers</key>\\s*<array>)")
+			contents = supported.sub(contents, "$1" + profile)
+		else:
+			contents = contents.replace(closing_marker, "<key>GCSupportedGameControllers</key><array>" + profile + "</array>\n" + closing_marker)
 
 	var w := FileAccess.open(plist_path, FileAccess.WRITE)
 	if w == null:

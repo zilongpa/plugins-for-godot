@@ -20,6 +20,9 @@
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
 #include <godot_cpp/classes/window.hpp>
+#include <godot_cpp/classes/sub_viewport.hpp>
+#include <godot_cpp/classes/packed_scene.hpp>
+#include <godot_cpp/classes/resource_loader.hpp>
 #include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
@@ -91,7 +94,8 @@ void SceneLoader::initialize(godot::Node *p_node, GodotRealityKit::Entity p_enti
 
 	took_capture = !should_dump_metal_capture();
 
-	GodotRealityKit::Initialize();
+	static dispatch_once_t initialize_once;
+	dispatch_once(&initialize_once, ^{ GodotRealityKit::Initialize(); });
 }
 
 SceneLoader::~SceneLoader() {
@@ -273,7 +277,69 @@ void SceneLoader::dump_metal_capture(id<MTLCommandQueue> p_command_queue) {
 	}
 }
 
+void RealitySceneTree::_bind_methods() {
+	godot::ClassDB::bind_method(godot::D_METHOD("open_volume_window", "scene_path", "title"), &RealitySceneTree::open_volume_window);
+	godot::ClassDB::bind_method(godot::D_METHOD("reopen_volume_window", "window_id"), &RealitySceneTree::reopen_volume_window);
+}
+
+SceneLoader *RealitySceneTree::get_loader_for_node(godot::Node *p_node) {
+	for (auto *candidate : window_loaders) {
+		auto *root = candidate->get_root_node();
+		if (root == p_node || root->is_ancestor_of(p_node)) { return candidate; }
+	}
+	return loader;
+}
+
+void RealitySceneTree::update_loaders() {
+	if (loader) { loader->update(); }
+	for (auto *extra : window_loaders) { extra->update(); }
+}
+
+int64_t RealitySceneTree::open_volume_window(const godot::String &p_scene_path, const godot::String &p_title) {
+#if TARGET_OS_XR
+	ERR_FAIL_COND_V(!enabled || !loader, -1);
+	godot::Ref<godot::PackedScene> packed = godot::ResourceLoader::get_singleton()->load(p_scene_path, "PackedScene");
+	ERR_FAIL_COND_V_MSG(packed.is_null(), -1, "Unable to load volume scene");
+	godot::Node *scene = packed->instantiate();
+	ERR_FAIL_NULL_V(scene, -1);
+	const uint64_t id = window_loaders.size() + 1;
+	scene->set_meta("_gdrk_window_root", true);
+	auto *viewport = memnew(godot::SubViewport);
+	viewport->set_name(godot::String("VolumeWindow_") + godot::String::num_uint64(id));
+	viewport->set_use_own_world_3d(true);
+	viewport->set_size(godot::Vector2i(1280, 1280));
+	viewport->set_update_mode(godot::SubViewport::UPDATE_DISABLED);
+	get_root()->add_child(viewport);
+	viewport->add_child(scene);
+	GodotRealityKit::Entity entity = GodotRealityKit::Entity::initAndMaterialize();
+	auto *extra = memnew(SceneLoader);
+	extra->initialize(scene, entity);
+	extra->get_nodes()->window_scene_root = scene;
+	window_loaders.push_back(extra);
+	connect("node_added", callable_mp(extra->get_nodes(), &NodeLoaders::node_added));
+	connect("node_removed", callable_mp(extra->get_nodes(), &NodeLoaders::node_removed));
+	std::function<void(godot::Node *)> register_subtree = [&](godot::Node *node) {
+		extra->get_nodes()->node_added(node);
+		for (int i = 0; i < node->get_child_count(); ++i) { register_subtree(node->get_child(i)); }
+	};
+	register_subtree(scene);
+	bridge.openVolumeWindow(entity, GDRKBridgeDelegate(extra), id,
+			swift::String::init([NSString stringWithUTF8String:p_title.utf8().get_data()]));
+	NSLog(@"[GDRK Windows] created id=%llu scene=%s root=%llu", id, p_scene_path.utf8().get_data(), entity.id());
+	return id;
+#else
+	return -1;
+#endif
+}
+
+void RealitySceneTree::reopen_volume_window(int64_t p_id) {
+#if TARGET_OS_XR
+	if (p_id > 0 && p_id <= (int64_t)window_loaders.size()) { bridge.reopenVolumeWindow(p_id); }
+#endif
+}
+
 RealitySceneTree::~RealitySceneTree() {
+	for (auto *extra : window_loaders) { godot::memdelete(extra); }
 	if (loader) {
 		memfree(loader);
 	}
@@ -413,6 +479,7 @@ bool RealitySceneTree::_physics_process(double p_time) {
 	if (loader) {
 		loader->flush_input_events();
 	}
+	for (auto *extra : window_loaders) { extra->flush_input_events(); }
 	return res;
 }
 

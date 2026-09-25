@@ -130,7 +130,7 @@ class RealitySceneTree : public godot::SceneTree {
 	GDCLASS(RealitySceneTree, SceneTree);
 
 protected:
-	static void _bind_methods() {}
+	static void _bind_methods();
 
 public:
 	~RealitySceneTree() override;
@@ -141,6 +141,10 @@ public:
 	bool _physics_process(double p_time) override;
 
 	SceneLoader *get_loader() { return loader; }
+	SceneLoader *get_loader_for_node(godot::Node *p_node);
+	void update_loaders();
+	int64_t open_volume_window(const godot::String &p_scene_path, const godot::String &p_title);
+	void reopen_volume_window(int64_t p_id);
 
 	const GDRKBridgeDelegate::ExtensionSettings &get_extension_settings() const { return extension_settings; }
 
@@ -151,6 +155,7 @@ private:
 
 	GodotRealityKit::Bridge bridge = GodotRealityKit::Bridge::init();
 	SceneLoader *loader = nullptr;
+	godot::LocalVector<SceneLoader *> window_loaders;
 	GDRKBridgeDelegate::ExtensionSettings extension_settings;
 #if TARGET_OS_XR
 	// The accessory-backed controller interface, when this scene tree registered one.

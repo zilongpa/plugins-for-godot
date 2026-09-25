@@ -19,24 +19,29 @@
 
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2.hpp>
+#include <godot_cpp/classes/node.hpp>
+#include <map>
+#include <array>
+#include <string>
+#include "window_haptic_mixer.h"
 
 namespace gdrk {
 
 // Publishes the spatial controllers' poses as Godot controller trackers.
 // A shared volume has no compositor services session, so the engine's visionOS interface
-// cannot run its ARKit accessory provider there. The RealityKit bridge anchors an
-// AnchorEntity(.accessory) to each controller instead and pushes its scene-root-local
-// transform here (see RealityKitBridge.swift); this interface republishes it on the standard
-// "left_hand" / "right_hand" trackers, so XRController3D keeps working unchanged.
+// cannot run its ARKit accessory provider there. The Swift bridge owns one shared
+// ARKit provider and converts its anchors into each volume root coordinate space.
+// Main-volume trackers retain left_hand/right_hand; extra volumes use scoped names.
 // This interface only tracks: it renders nothing and reports no capabilities.
 class RealityControllerXRInterface : public godot::XRInterfaceExtension {
 	GDCLASS(RealityControllerXRInterface, XRInterfaceExtension);
 
 protected:
-	static void _bind_methods() {}
+	static void _bind_methods();
 
 public:
 	static const char *interface_name;
+	void log_diagnostic(const godot::String &p_message) const;
 
 	// The initialized instance, or null when the interface isn't running. Poses pushed while
 	// this is null are dropped, which is what keeps accessory tracking off outside a shared
@@ -58,7 +63,8 @@ public:
 	// trackers at a consistent point in the frame.
 	void set_anchor_pose(godot::XRPositionalTracker::TrackerHand p_hand,
 			const godot::Transform3D &p_pose,
-			bool p_tracked);
+			bool p_tracked, uint64_t p_window = 0);
+	godot::StringName tracker_for_node(godot::Node *p_node, const godot::String &p_hand);
 
 	// A spatial controller's button / thumbstick state, sampled from GCController by the bridge.
 	struct ControllerInput {
@@ -87,14 +93,22 @@ private:
 		godot::Ref<godot::XRControllerTracker> tracker;
 		godot::Transform3D pose;
 		bool tracked = false;
+		double updated_at = 0.0;
 		bool pose_published = false;
 		ControllerInput input;
 		bool has_input = false;
 		void *gc_controller = nullptr; // Unretained GCController *, refreshed each frame.
+		void *haptic_player = nullptr; // Retained CHHapticPatternPlayer, stopped on contact exit.
 		void *haptic_engine = nullptr; // Retained CHHapticEngine *, created lazily.
 	};
 
 	static void publish(Controller &p_controller);
+	Controller &window_controller(uint64_t p_window, bool p_left);
+	void mix_haptics();
+	void play_haptic_pulse(const godot::String &p_action_name, const godot::StringName &p_tracker_name, double p_frequency, double p_amplitude, double p_duration_sec, double p_delay_sec);
+	std::map<uint64_t, std::array<Controller, 2>> windows;
+	WindowHapticMixer mixer;
+	std::array<double, 2> output_amplitude = {}, output_frequency = {}, output_renewal = {};
 
 	// Maps a tracker name ("left_hand" / "right_hand") to its controller, or null if the name
 	// doesn't match either. Used by _trigger_haptic_pulse, which only gets the tracker name.
@@ -102,6 +116,7 @@ private:
 
 	static void *ensure_haptic_engine(Controller &p_controller);
 	static void release_haptic_engine(Controller &p_controller);
+	static void stop_haptic_player(Controller &p_controller);
 
 	static RealityControllerXRInterface *active;
 

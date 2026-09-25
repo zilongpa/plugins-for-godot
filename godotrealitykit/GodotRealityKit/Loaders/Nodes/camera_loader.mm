@@ -41,7 +41,8 @@ godot::Node3D *CameraLoader::get_current_node() const {
 	RealitySceneTree *reality_scene_tree = godot::Object::cast_to<RealitySceneTree>(engine->get_main_loop());
 	ERR_FAIL_NULL_V(reality_scene_tree, nullptr);
 
-	godot::Viewport *viewport = reality_scene_tree->get_root()->get_viewport();
+	godot::Viewport *viewport = Base::owner->window_scene_root
+			? Base::owner->window_scene_root->get_viewport() : reality_scene_tree->get_root()->get_viewport();
 	if (godot::Camera3D *camera_3d = viewport->get_camera_3d()) {
 #if TARGET_OS_XR
 		if (RealityVolumeCamera3D *volume_camera = godot::Object::cast_to<RealityVolumeCamera3D>(camera_3d->get_parent())) {

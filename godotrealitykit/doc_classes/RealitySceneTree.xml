@@ -1,11 +1,28 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <class name="RealitySceneTree" inherits="SceneTree" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
 	<brief_description>
-		Internal object synchronizing updates from Godot to RealityKit.
+		Synchronizes Godot scenes with RealityKit and opens additional 3D volumes.
 	</brief_description>
 	<description>
-		This object is not meant to be used directly; internally it is connected to resource-changed signals.
+		This scene tree synchronizes Godot scene changes with RealityKit. On visionOS, an additional volume can run its own scene and [World3D] alongside the main scene.
 	</description>
 	<tutorials>
 	</tutorials>
+	<methods>
+		<method name="open_volume_window">
+			<return type="int" />
+			<param index="0" name="scene_path" type="String" />
+			<param index="1" name="title" type="String" />
+			<description>
+				Creates an additional volumetric window containing a separate instance of the packed scene at [param scene_path]. Returns its window ID, or [code]-1[/code] if unavailable or the scene cannot be loaded. The scene and its [World3D] remain alive when the window closes.
+			</description>
+		</method>
+		<method name="reopen_volume_window">
+			<return type="void" />
+			<param index="0" name="window_id" type="int" />
+			<description>
+				Reopens the volume created by [method open_volume_window] with the given ID. An unknown ID has no effect.
+			</description>
+		</method>
+	</methods>
 </class>
