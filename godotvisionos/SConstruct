@@ -36,7 +36,8 @@ def prepare_checkout(name, destination):
     url = os.environ.get(name + '_URL', dependency_config[name + '_URL'])
     branch = os.environ.get(name + '_BRANCH', dependency_config[name + '_BRANCH'])
     os.makedirs(os.path.dirname(destination), exist_ok=True)
-    subprocess.check_call(['git', 'clone', '--branch', branch, '--single-branch', url, destination])
+    subprocess.check_call(['git', 'clone', url, destination])
+    subprocess.check_call(['git', '-C', destination, 'checkout', '--detach', branch])
 
 def archive_name():
     if platform == 'macos':
