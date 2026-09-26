@@ -964,6 +964,7 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
         guard observers.isEmpty else { return }
         observers.append(NotificationCenter.default.addObserver(forName: Notification.Name("org.godotengine.visionos.openWindow"), object: nil, queue: .main) { notification in
             guard let id = notification.object as? UInt64 else { return }
+            (notification.userInfo?["routing"] as? NSMutableDictionary)?["claimed"] = true
             MainActor.assumeIsolated {
                 guard opened.insert(id).inserted else { return }
                 let generation = (generations[id] ?? 0) + 1
