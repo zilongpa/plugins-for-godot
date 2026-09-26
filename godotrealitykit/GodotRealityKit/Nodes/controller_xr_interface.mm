@@ -11,15 +11,17 @@
 
 #import "controller_xr_interface.h"
 
+#import "scene_tree.h"
+#import "utility.h"
+
+#import <CoreHaptics/CoreHaptics.h>
+#import <GameController/GameController.h>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/xr_pose.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
 #include <algorithm>
-#include <godot_cpp/classes/time.hpp>
 #include <cmath>
-
-#import <CoreHaptics/CoreHaptics.h>
-#import <GameController/GameController.h>
 
 namespace gdrk {
 static double controller_time() { return godot::Time::get_singleton()->get_ticks_usec() / 1000000.0; }
@@ -37,6 +39,16 @@ static const godot::StringName &default_pose_name() {
 }
 
 void RealityControllerXRInterface::_bind_methods() {
+	using namespace godot;
+	ClassDB::bind_method(D_METHOD("tracker_for_volume", "window_id", "hand"), &RealityControllerXRInterface::tracker_for_volume);
+	ClassDB::bind_method(D_METHOD("is_controller_connected", "hand"), &RealityControllerXRInterface::is_controller_connected);
+	ClassDB::bind_method(D_METHOD("get_supported_inputs", "hand"), &RealityControllerXRInterface::get_supported_inputs);
+	ClassDB::bind_method(D_METHOD("get_supported_poses", "hand"), &RealityControllerXRInterface::get_supported_poses);
+	ClassDB::bind_method(D_METHOD("supports_haptics", "hand"), &RealityControllerXRInterface::supports_haptics);
+	ADD_SIGNAL(MethodInfo("controller_connection_changed", PropertyInfo(Variant::STRING, "hand"), PropertyInfo(Variant::BOOL, "connected")));
+	ADD_SIGNAL(MethodInfo("controller_capabilities_changed", PropertyInfo(Variant::STRING, "hand")));
+	ADD_SIGNAL(MethodInfo("tracking_error", PropertyInfo(Variant::STRING, "message")));
+
 	godot::ClassDB::bind_method(godot::D_METHOD("tracker_for_node", "node", "hand"), &RealityControllerXRInterface::tracker_for_node);
 	godot::ClassDB::bind_method(godot::D_METHOD("log_diagnostic", "message"), &RealityControllerXRInterface::log_diagnostic);
 }
@@ -64,6 +76,13 @@ bool RealityControllerXRInterface::_initialize() {
 		return true;
 	}
 
+#if TARGET_OS_XR
+	if (!GodotRealityKit::Bridge::isAccessoryTrackingSupported()) {
+		return false;
+	}
+#else
+	return false;
+#endif
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
 	ERR_FAIL_NULL_V(xr_server, false);
 
@@ -78,6 +97,8 @@ bool RealityControllerXRInterface::_initialize() {
 	right.tracker->set_tracker_name("right_hand");
 	right.tracker->set_tracker_desc("Spatial controller held in the right hand");
 	xr_server->add_tracker(right.tracker);
+	left.suspended = true;
+	right.suspended = true;
 
 	initialized = true;
 	active = this;
@@ -102,7 +123,13 @@ void RealityControllerXRInterface::_uninitialize() {
 		controller->tracked = false;
 		controller->pose_published = false;
 		release_haptic_engine(*controller);
+		if (controller->gc_controller) {
+			CFRelease(controller->gc_controller);
+		}
 		controller->gc_controller = nullptr;
+		controller->input = {};
+		controller->poses.clear();
+		controller->suspended = false;
 	}
 
 	for (auto &[id, pair] : windows) {
@@ -113,22 +140,53 @@ void RealityControllerXRInterface::_uninitialize() {
 	windows.clear(); mixer.clear();
 	output_amplitude = {}; output_frequency = {}; output_renewal = {};
 	initialized = false;
+	provider_running = false;
+#if TARGET_OS_XR
+	GodotRealityKit::Bridge::stopAccessoryTracking();
+#endif
 }
 
 godot::XRInterface::TrackingStatus RealityControllerXRInterface::_get_tracking_status() const {
 	if (!initialized) {
 		return godot::XRInterface::XR_NOT_TRACKING;
 	}
-	// No controller anchored yet is indistinguishable from none connected, so report the
-	// optimistic status only once something is actually being tracked.
-	return (left.tracked || right.tracked) ? godot::XRInterface::XR_NORMAL_TRACKING
-										   : godot::XRInterface::XR_NOT_TRACKING;
+	if (!provider_running) {
+		return godot::XRInterface::XR_NOT_TRACKING;
+	}
+	bool low = false;
+	auto status = [&](const Controller &c) {
+		for (const auto &[name, pose] : c.poses) {
+			if (c.tracked && pose.confidence == godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH) {
+				return true;
+			}
+			low |= c.tracked && pose.confidence == godot::XRPose::XR_TRACKING_CONFIDENCE_LOW;
+		}
+		return false;
+	};
+	if (status(left) || status(right)) {
+		return godot::XRInterface::XR_NORMAL_TRACKING;
+	}
+	for (const auto &[id, pair] : windows) {
+		for (const auto &c : pair) {
+			if (status(c)) {
+				return godot::XRInterface::XR_NORMAL_TRACKING;
+			}
+		}
+	}
+	return low ? godot::XRInterface::XR_INSUFFICIENT_FEATURES : godot::XRInterface::XR_NOT_TRACKING;
 }
 
 godot::PackedStringArray RealityControllerXRInterface::_get_suggested_tracker_names() const {
 	godot::PackedStringArray names;
 	names.push_back("left_hand");
 	names.push_back("right_hand");
+	for (const auto &[id, pair] : windows) {
+		for (const auto &c : pair) {
+			if (c.tracker.is_valid()) {
+				names.push_back(c.tracker->get_tracker_name());
+			}
+		}
+	}
 	return names;
 }
 
@@ -145,12 +203,35 @@ void RealityControllerXRInterface::set_controller_input(godot::XRPositionalTrack
 		const ControllerInput &p_input,
 		void *p_gc_controller) {
 	Controller &controller = (p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT) ? left : right;
+	const bool changed = controller.gc_controller != p_gc_controller;
+	const bool capabilities_changed = controller.input.supported != p_input.supported || controller.input.poses != p_input.poses || controller.input.haptics != p_input.haptics;
 	controller.input = p_input;
 	controller.has_input = true;
 
 	if (controller.gc_controller != p_gc_controller) {
 		release_haptic_engine(controller);
+		if (controller.gc_controller) {
+			CFRelease(controller.gc_controller);
+		}
 		controller.gc_controller = p_gc_controller;
+		if (p_gc_controller) {
+			CFRetain(p_gc_controller);
+		}
+	}
+	if (!p_gc_controller) {
+		const bool is_left = p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT;
+		controller.tracked = false;
+		mixer.remove_hand(is_left);
+		for (auto &[id, pair] : windows) {
+			pair[is_left ? 0 : 1].tracked = false;
+		}
+	}
+	const godot::String hand = p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT ? "left_hand" : "right_hand";
+	if (changed) {
+		emit_signal("controller_connection_changed", hand, p_gc_controller != nullptr);
+	}
+	if (capabilities_changed) {
+		emit_signal("controller_capabilities_changed", hand);
 	}
 }
 
@@ -165,7 +246,7 @@ void RealityControllerXRInterface::_process() {
 			auto &controller = pair[i];
 			if (now - controller.updated_at > 0.5) { controller.tracked = false; }
 			const auto &physical = i == 0 ? left : right;
-			controller.input = physical.input;
+			controller.input = controller.suspended ? ControllerInput() : physical.input;
 			controller.has_input = physical.has_input;
 			publish(controller);
 		}
@@ -177,6 +258,7 @@ RealityControllerXRInterface::Controller &RealityControllerXRInterface::window_c
 	if (!id) { return is_left ? left : right; }
 	auto &controller = windows[id][is_left ? 0 : 1];
 	if (controller.tracker.is_null()) {
+		controller.suspended = true;
 		controller.tracker.instantiate();
 		controller.tracker->set_tracker_hand(is_left ? godot::XRPositionalTracker::TRACKER_HAND_LEFT : godot::XRPositionalTracker::TRACKER_HAND_RIGHT);
 		controller.tracker->set_tracker_name(godot::String("/gdrk/window/") + godot::String::num_uint64(id) + (is_left ? "/left_hand" : "/right_hand"));
@@ -186,12 +268,98 @@ RealityControllerXRInterface::Controller &RealityControllerXRInterface::window_c
 }
 
 godot::StringName RealityControllerXRInterface::tracker_for_node(godot::Node *node, const godot::String &hand) {
-	ERR_FAIL_COND_V(hand != "left_hand" && hand != "right_hand", godot::StringName());
-	uint64_t id = 0;
-	for (auto *ancestor = node; ancestor; ancestor = ancestor->get_parent()) {
-		if (ancestor->has_meta("_gdrk_window_root")) { id = ancestor->get_instance_id(); break; }
+	if (!initialized || !node) {
+		return {};
+	}
+	auto *tree = godot::Object::cast_to<RealitySceneTree>(godot::Engine::get_singleton()->get_main_loop());
+	return tree ? tracker_for_volume(tree->get_volume_window_id(node), hand) : godot::StringName();
+}
+godot::StringName RealityControllerXRInterface::tracker_for_volume(int64_t id, const godot::String &hand) {
+	if (!initialized || id < 0 || (hand != "left_hand" && hand != "right_hand")) {
+		return {};
+	}
+	auto *tree = godot::Object::cast_to<RealitySceneTree>(godot::Engine::get_singleton()->get_main_loop());
+	if (!tree || !tree->has_volume_window(id) || tree->get_volume_window_state(id) == RealitySceneTree::DESTROYING) {
+		return {};
 	}
 	return window_controller(id, hand == "left_hand").tracker->get_tracker_name();
+}
+const RealityControllerXRInterface::Controller *RealityControllerXRInterface::physical_for_hand(const godot::String &hand) const {
+	return hand == "left_hand" ? &left : (hand == "right_hand" ? &right : nullptr);
+}
+bool RealityControllerXRInterface::is_controller_connected(const godot::String &hand) const {
+	auto *c = physical_for_hand(hand);
+	return initialized && c && c->gc_controller;
+}
+godot::PackedStringArray RealityControllerXRInterface::get_supported_inputs(const godot::String &hand) const {
+	auto *c = physical_for_hand(hand);
+	return c ? c->input.supported : godot::PackedStringArray();
+}
+godot::PackedStringArray RealityControllerXRInterface::get_supported_poses(const godot::String &hand) const {
+	auto *c = physical_for_hand(hand);
+	return c ? c->input.poses : godot::PackedStringArray();
+}
+bool RealityControllerXRInterface::supports_haptics(const godot::String &hand) const {
+	auto *c = physical_for_hand(hand);
+	return c && c->gc_controller && c->input.haptics;
+}
+void RealityControllerXRInterface::set_tracking_state(bool running, const godot::String &error) {
+	provider_running = running;
+	if (!running) {
+		suspend_volume(0);
+		for (auto &[id, pair] : windows) {
+			suspend_volume(id);
+		}
+	}
+	if (!error.is_empty()) {
+		emit_signal("tracking_error", error);
+	}
+}
+void RealityControllerXRInterface::suspend_volume(uint64_t id) {
+	if (id && !windows.count(id)) {
+		return;
+	}
+	for (int i = 0; i < 2; ++i) {
+		auto &c = id ? windows.at(id)[i] : (i ? right : left);
+		c.tracked = false;
+		c.suspended = true;
+		for (auto &[name, pose] : c.poses) {
+			pose.confidence = godot::XRPose::XR_TRACKING_CONFIDENCE_NONE;
+		}
+		if (c.tracker.is_valid()) {
+			mixer.remove(godot::String(c.tracker->get_tracker_name()).utf8().get_data());
+		}
+		publish(c);
+	}
+	mix_haptics();
+}
+void RealityControllerXRInterface::remove_volume(uint64_t id) {
+	suspend_volume(id);
+	auto it = windows.find(id);
+	if (it == windows.end()) {
+		return;
+	}
+	for (auto &c : it->second) {
+		if (c.tracker.is_valid()) {
+			godot::XRServer::get_singleton()->remove_tracker(c.tracker);
+		}
+	}
+	windows.erase(it);
+}
+void RealityControllerXRInterface::set_named_pose(uint64_t volume, bool is_left, const godot::StringName &name, const godot::Transform3D &transform,
+		const godot::Vector3 &velocity, const godot::Vector3 &angular, int confidence, bool supported) {
+	auto &c = window_controller(volume, is_left);
+	c.suspended = false;
+	c.updated_at = controller_time();
+	auto &p = c.poses[name];
+	p = { transform, velocity, angular, static_cast<godot::XRPose::TrackingConfidence>(confidence), supported };
+	if (name == godot::StringName("grip")) {
+		c.poses["default"] = p;
+	}
+	c.tracked = false;
+	for (const auto &[key, pose] : c.poses) {
+		c.tracked |= pose.confidence != godot::XRPose::XR_TRACKING_CONFIDENCE_NONE;
+	}
 }
 
 void RealityControllerXRInterface::publish(Controller &p_controller) {
@@ -199,20 +367,17 @@ void RealityControllerXRInterface::publish(Controller &p_controller) {
 		return;
 	}
 
-	if (p_controller.tracked) {
-		// The bridge samples the anchor once per RealityKit update, so there is no meaningful
-		// velocity to report.
-		p_controller.tracker->set_pose(default_pose_name(), p_controller.pose,
-				godot::Vector3(), godot::Vector3(), godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH);
-		p_controller.pose_published = true;
-	} else if (p_controller.pose_published) {
-		p_controller.tracker->invalidate_pose(default_pose_name());
-		p_controller.pose_published = false;
+	for (const auto &[name, pose] : p_controller.poses) {
+		if (p_controller.tracked && pose.supported && pose.confidence != godot::XRPose::XR_TRACKING_CONFIDENCE_NONE) {
+			p_controller.tracker->set_pose(name, pose.transform, pose.velocity, pose.angular, pose.confidence);
+		} else {
+			p_controller.tracker->invalidate_pose(name);
+		}
 	}
 
 	if (p_controller.has_input) {
 		const godot::Ref<godot::XRControllerTracker> &tracker = p_controller.tracker;
-		const ControllerInput &in = p_controller.input;
+		const ControllerInput in = p_controller.suspended ? ControllerInput() : p_controller.input;
 		tracker->set_input("trigger", in.trigger);
 		tracker->set_input("trigger_click", in.trigger_click);
 		tracker->set_input("grip", in.grip);
@@ -222,6 +387,11 @@ void RealityControllerXRInterface::publish(Controller &p_controller) {
 		tracker->set_input("menu_button", in.menu_button);
 		tracker->set_input("primary", in.thumbstick);
 		tracker->set_input("primary_click", in.thumbstick_click);
+		tracker->set_input("trigger_touch", in.trigger_touch);
+		tracker->set_input("grip_touch", in.grip_touch);
+		tracker->set_input("primary_touch", in.primary_touch);
+		tracker->set_input("ax_touch", in.ax_touch);
+		tracker->set_input("by_touch", in.by_touch);
 	}
 }
 

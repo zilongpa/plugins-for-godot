@@ -50,9 +50,12 @@ uint32_t ProgramCache::load_usda(ProgramDescription &&p_desc, swift::String &con
 	program_loading_idxs.insert(program_idx);
 
 	GodotRealityKit::SGLProgram::load("/bm", content,
-			GDRKMaterialLoadDelegate([this, program_idx, finalize = std::move(p_finalize_callback)](void *p_material_load_result) {
+			GDRKMaterialLoadDelegate([this, weak = std::weak_ptr<bool>(alive), program_idx, finalize = std::move(p_finalize_callback)](void *p_material_load_result) {
 				GodotRealityKit::SGLMaterialLoadResult material_load_result =
 						GodotRealityKit::SGLMaterialLoadResult::fromRawPointer(p_material_load_result);
+				if (weak.expired()) {
+					return;
+				}
 
 				gdrk::emplace_replace(&programs[program_idx].value, material_load_result.getResult());
 				program_loading_idxs.remove(program_idx);

@@ -22,6 +22,9 @@ class InputEventSpatialTouch : public godot::InputEventScreenTouch {
 	GDCLASS(InputEventSpatialTouch, InputEventScreenTouch)
 protected:
 	static void _bind_methods() {
+		godot::ClassDB::bind_method(godot::D_METHOD("set_volume_window_id", "window_id"), &InputEventSpatialTouch::set_volume_window_id);
+		godot::ClassDB::bind_method(godot::D_METHOD("get_volume_window_id"), &InputEventSpatialTouch::get_volume_window_id);
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "volume_window_id"), "set_volume_window_id", "get_volume_window_id");
 		godot::ClassDB::bind_method(godot::D_METHOD("get_world_position"), &InputEventSpatialTouch::get_world_position);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_world_position", "world_position"), &InputEventSpatialTouch::set_world_position);
 		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "world_position"), "set_world_position", "get_world_position");
@@ -46,11 +49,11 @@ protected:
 
 		godot::ClassDB::bind_method(godot::D_METHOD("get_input_device_pose_orientation"), &InputEventSpatialTouch::get_input_device_pose_orientation);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_input_device_pose_orientation", "input_device_pose_orientation"), &InputEventSpatialTouch::set_input_device_pose_orientation);
-		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "input_device_pose_orientation"), "set_input_device_pose_orientation", "get_input_device_pose_orientation");
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::QUATERNION, "input_device_pose_orientation"), "set_input_device_pose_orientation", "get_input_device_pose_orientation");
 
 		godot::ClassDB::bind_method(godot::D_METHOD("get_chirality"), &InputEventSpatialTouch::get_chirality);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_chirality", "chirality"), &InputEventSpatialTouch::set_chirality);
-		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "chirality"), "set_chirality", "get_chirality");
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "chirality"), "set_chirality", "get_chirality");
 
 		BIND_ENUM_CONSTANT(FLAG_HAS_SELECTION_RAY);
 		BIND_ENUM_CONSTANT(FLAG_HAS_INPUT_DEVICE_POSE);
@@ -61,7 +64,11 @@ protected:
 		BIND_ENUM_CONSTANT(CHIRALITY_RIGHT);
 	}
 
+	int64_t volume_window_id = -1;
+
 public:
+	void set_volume_window_id(int64_t id) { volume_window_id = id; }
+	int64_t get_volume_window_id() const { return volume_window_id; }
 	godot::Vector3 get_world_position() const { return world_position; }
 	void set_world_position(const godot::Vector3 &p_world_position) {
 		world_position = p_world_position;
@@ -79,8 +86,14 @@ public:
 		CHIRALITY_RIGHT,
 	};
 
-	bool get_flag(Flags p_flag) const { return flags[uint32_t(p_flag)]; }
-	void set_flag(Flags p_flag, bool p_value) { flags[uint32_t(p_flag)] = p_value; }
+	bool get_flag(Flags p_flag) const {
+		ERR_FAIL_COND_V(uint32_t(p_flag) >= FLAG_MAX, false);
+		return flags[uint32_t(p_flag)];
+	}
+	void set_flag(Flags p_flag, bool p_value) {
+		ERR_FAIL_COND(uint32_t(p_flag) >= FLAG_MAX);
+		flags[uint32_t(p_flag)] = p_value;
+	}
 
 	godot::Vector3 get_selection_ray_origin() const { return selection_ray_origin; }
 	void set_selection_ray_origin(const godot::Vector3 &p_selection_ray_origin) {
@@ -123,6 +136,9 @@ class InputEventSpatialDrag : public godot::InputEventScreenDrag {
 	GDCLASS(InputEventSpatialDrag, InputEventScreenDrag)
 protected:
 	static void _bind_methods() {
+		godot::ClassDB::bind_method(godot::D_METHOD("set_volume_window_id", "window_id"), &InputEventSpatialDrag::set_volume_window_id);
+		godot::ClassDB::bind_method(godot::D_METHOD("get_volume_window_id"), &InputEventSpatialDrag::get_volume_window_id);
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "volume_window_id"), "set_volume_window_id", "get_volume_window_id");
 		godot::ClassDB::bind_method(godot::D_METHOD("get_world_position"), &InputEventSpatialDrag::get_world_position);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_world_position", "world_position"), &InputEventSpatialDrag::set_world_position);
 		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "world_position"), "set_world_position", "get_world_position");
@@ -154,14 +170,18 @@ protected:
 
 		godot::ClassDB::bind_method(godot::D_METHOD("get_input_device_pose_orientation"), &InputEventSpatialDrag::get_input_device_pose_orientation);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_input_device_pose_orientation", "input_device_pose_orientation"), &InputEventSpatialDrag::set_input_device_pose_orientation);
-		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "input_device_pose_orientation"), "set_input_device_pose_orientation", "get_input_device_pose_orientation");
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::QUATERNION, "input_device_pose_orientation"), "set_input_device_pose_orientation", "get_input_device_pose_orientation");
 
 		godot::ClassDB::bind_method(godot::D_METHOD("get_chirality"), &InputEventSpatialDrag::get_chirality);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_chirality", "chirality"), &InputEventSpatialDrag::set_chirality);
 		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "chirality"), "set_chirality", "get_chirality");
 	}
 
+	int64_t volume_window_id = -1;
+
 public:
+	void set_volume_window_id(int64_t id) { volume_window_id = id; }
+	int64_t get_volume_window_id() const { return volume_window_id; }
 	godot::Vector3 get_world_position() const { return world_position; }
 	void set_world_position(const godot::Vector3 &p_world_position) {
 		world_position = p_world_position;
@@ -172,8 +192,14 @@ public:
 		world_relative = p_world_relative;
 	}
 
-	bool get_flag(InputEventSpatialTouch::Flags p_flag) const { return flags[uint32_t(p_flag)]; }
-	void set_flag(InputEventSpatialTouch::Flags p_flag, bool p_value) { flags[uint32_t(p_flag)] = p_value; }
+	bool get_flag(InputEventSpatialTouch::Flags p_flag) const {
+		ERR_FAIL_COND_V(uint32_t(p_flag) >= InputEventSpatialTouch::FLAG_MAX, false);
+		return flags[uint32_t(p_flag)];
+	}
+	void set_flag(InputEventSpatialTouch::Flags p_flag, bool p_value) {
+		ERR_FAIL_COND(uint32_t(p_flag) >= InputEventSpatialTouch::FLAG_MAX);
+		flags[uint32_t(p_flag)] = p_value;
+	}
 
 	godot::Vector3 get_selection_ray_origin() const { return selection_ray_origin; }
 	void set_selection_ray_origin(const godot::Vector3 &p_selection_ray_origin) {

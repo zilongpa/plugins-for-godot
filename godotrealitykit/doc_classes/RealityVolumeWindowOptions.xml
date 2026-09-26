@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<class xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd" name="RealityVolumeWindowOptions" inherits="Resource">
+	<brief_description>Physical size and presentation preferences for a volume.</brief_description>
+	<description>All dimensions are in meters; zero on an axis leaves that preference to the system. Options are snapshots: apply changes with [method RealitySceneTree.set_volume_window_options]. Requested dimensions are preferences, while [method RealitySceneTree.get_volume_window_size] reports the measured result. The system can constrain sizing. These options do not control window placement.</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="initial_size" type="Vector3" setter="set_initial_size" getter="get_initial_size" default="Vector3(0, 0, 0)">Preferred size for the next open, clamped to configured limits. Does not resize an existing host.</member>
+		<member name="minimum_size" type="Vector3" setter="set_minimum_size" getter="get_minimum_size" default="Vector3(0, 0, 0)">Minimum extent. Each nonzero component must not exceed its corresponding nonzero maximum.</member>
+		<member name="maximum_size" type="Vector3" setter="set_maximum_size" getter="get_maximum_size" default="Vector3(0, 0, 0)">Maximum extent; zero leaves the axis unconstrained by the application.</member>
+		<member name="resize_mode" type="int" setter="set_resize_mode" getter="get_resize_mode" default="0" enum="RealityVolumeWindowOptions.ResizeMode">System default, fixed current size, or user resizing. Initial preferences are used when no actual size exists.</member>
+		<member name="baseplate_visibility" type="int" setter="set_baseplate_visibility" getter="get_baseplate_visibility" default="0" enum="RealityVolumeWindowOptions.BaseplateVisibility">System baseplate visibility. Does not affect the rendered Godot scene.</member>
+	</members>
+	<constants>
+		<constant name="RESIZE_SYSTEM" value="0" enum="ResizeMode">Resize system.</constant>
+		<constant name="RESIZE_FIXED" value="1" enum="ResizeMode">Resize fixed.</constant>
+		<constant name="RESIZE_ENABLED" value="2" enum="ResizeMode">Resize enabled.</constant>
+		<constant name="BASEPLATE_SYSTEM" value="0" enum="BaseplateVisibility">Baseplate system.</constant>
+		<constant name="BASEPLATE_VISIBLE" value="1" enum="BaseplateVisibility">Baseplate visible.</constant>
+		<constant name="BASEPLATE_HIDDEN" value="2" enum="BaseplateVisibility">Baseplate hidden.</constant>
+	</constants>
+</class>

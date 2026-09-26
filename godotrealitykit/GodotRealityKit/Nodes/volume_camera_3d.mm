@@ -227,8 +227,11 @@ godot::Vector3 RealityVolumeCamera3D::_get_viewport_size() const {
 	godot::MainLoop *main_loop = engine->get_main_loop();
 	RealitySceneTree *scene_tree = godot::Object::cast_to<RealitySceneTree>(main_loop);
 	if (scene_tree && scene_tree->get_loader()) {
-		return scene_tree->get_loader_for_node(const_cast<RealityVolumeCamera3D *>(this))->get_viewport_size();
-	} else {
+		if (auto *loader = scene_tree->get_loader_for_node(const_cast<RealityVolumeCamera3D *>(this))) {
+			return loader->get_viewport_size();
+		}
+	}
+	{
 		const godot::Vector2 viewport_size = get_viewport()->get_visible_rect().size;
 		return godot::Vector3(viewport_size.x, viewport_size.y, std::min(viewport_size.x, viewport_size.y));
 	}

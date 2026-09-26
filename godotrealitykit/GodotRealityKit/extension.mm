@@ -30,6 +30,8 @@
 
 #include "Materials/exporter.h"
 
+#import <Foundation/Foundation.h>
+#import <GameController/GameController.h>
 #include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -37,9 +39,6 @@
 #include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
-
-#import <Foundation/Foundation.h>
-#import <GameController/GameController.h>
 
 namespace gdrk {
 
@@ -57,6 +56,7 @@ void initialize_gdrk_module(godot::ModuleInitializationLevel p_level) {
 
 	if (p_level == godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_RUNTIME_CLASS(RealitySceneTree);
+		GDREGISTER_CLASS(RealityVolumeWindowOptions);
 		GDREGISTER_RUNTIME_CLASS(TextureLoader);
 		GDREGISTER_RUNTIME_CLASS(EnvironmentLoader);
 		GDREGISTER_RUNTIME_CLASS(SkyboxLoader);
@@ -111,6 +111,52 @@ GDRKTransform GDRKTransform::identity = GDRKTransform{
 	.position = simd_make_float3(0.0f, 0.0f, 0.0f),
 	.orientation = simd_quaternion(0.0f, 0.0f, 0.0f, 1.0f)
 };
+
+GDRKBridgeDelegate::GDRKBridgeDelegate(gdrk::SceneLoader *p_loader) :
+		lifetime(p_loader->lifetime), generation(lifetime->generation) {}
+gdrk::SceneLoader *GDRKBridgeDelegate::get_loader() const {
+	return lifetime && lifetime->generation == generation ? lifetime->loader : nullptr;
+}
+bool GDRKBridgeDelegate::isValid() const {
+	return get_loader() != nullptr;
+}
+void GDRKBridgeDelegate::onVolumeWindowEvent(int event, const char *error) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
+	if (auto *tree = godot::Object::cast_to<gdrk::RealitySceneTree>(gdrk::get_scene_tree())) {
+		tree->native_window_event(loader->volume_id, generation, event, godot::String::utf8(error));
+	}
+}
+void GDRKBridgeDelegate::on2DWindowFailed(uint64_t id, const char *error) const {
+	ERR_PRINT(godot::String::utf8(error));
+	auto *display = godot::DisplayServer::get_singleton();
+	if (!display) {
+		return;
+	}
+	const uint64_t object_id = display->window_get_attached_instance_id(id);
+	if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
+		window->emit_signal("close_requested");
+	}
+	if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
+		window->call_deferred("hide");
+	}
+}
+void GDRKBridgeDelegate::cancelSpatialPress(int64_t id) const {
+	if (auto *loader = get_loader()) {
+		loader->cancel_press(id);
+	}
+}
+void GDRKBridgeDelegate::onVolumeSizeChanged(simd_float3 meters) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
+	if (auto *tree = godot::Object::cast_to<gdrk::RealitySceneTree>(gdrk::get_scene_tree())) {
+		tree->native_window_size(loader->volume_id, generation, gdrk::from_simd3(meters));
+	}
+}
 
 void GDRKBridgeDelegate::printError(const char *p_msg) {
 	ERR_PRINT(p_msg);
@@ -273,6 +319,10 @@ void GDRKBridgeDelegate::initialize_phase_manager() const {
 }
 
 void GDRKBridgeDelegate::setPHASETransform(GDRKTransform gdrk_transform) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
 	if (loader->get_nodes()->window_scene_root) { return; }
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
@@ -367,10 +417,18 @@ UIColor *GDRKBridgeDelegate::getBootSplashBgColor() const {
 #endif
 
 void *GDRKBridgeDelegate::getCameraEntity() const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return nullptr;
+	}
 	return loader->get_nodes()->get_cameras().get_current_entity().getRawPointer();
 }
 
 void GDRKBridgeDelegate::onWorldScaleChanged(float p_scale) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
 	loader->get_materials()->set_world_scale(p_scale);
 	loader->get_nodes()->get_directional_lights().set_world_scale(p_scale);
 	loader->get_nodes()->get_point_lights().set_world_scale(p_scale);
@@ -379,10 +437,18 @@ void GDRKBridgeDelegate::onWorldScaleChanged(float p_scale) const {
 
 #if TARGET_OS_OSX
 void GDRKBridgeDelegate::onWindowResized(simd_float2 p_new_size) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
 	loader->set_viewport_size(godot::Vector3(p_new_size.x, p_new_size.y, 1024.0));
 }
 #else
 void GDRKBridgeDelegate::onWindowResized(simd_float3 p_new_size) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
 	loader->set_viewport_size(gdrk::from_simd3(p_new_size));
 }
 #endif
@@ -400,6 +466,13 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		GDRKRay p_selection_ray,
 		bool p_has_chirality,
 		uint32_t p_chirality) const {
+	auto *loader = get_loader();
+	if (!loader) {
+		return;
+	}
+	if (!loader->input_enabled) {
+		return;
+	}
 	uint32_t cur_press_idx = 0;
 	bool is_first_press = true;
 	for (uint32_t press_idx = 0; press_idx < loader->max_active_presses; press_idx++) {
@@ -410,15 +483,28 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		}
 	}
 
+	if (is_first_press && p_ended) {
+		return;
+	}
 	if (is_first_press) {
-		cur_press_idx = loader->next_active_press_idx;
+		cur_press_idx = loader->max_active_presses;
+		for (uint32_t i = 0; i < loader->max_active_presses; ++i) {
+			if (loader->active_presses[i] == -1) {
+				cur_press_idx = i;
+				break;
+			}
+		}
+		if (cur_press_idx == loader->max_active_presses) {
+			return;
+		}
 		loader->next_active_press_idx = (loader->next_active_press_idx + 1) % loader->max_active_presses;
 		loader->active_presses[cur_press_idx] = p_event_id;
 	}
 
 	godot::Node3D *camera = loader->get_nodes()->get_cameras().get_current_node();
 	if (!camera) {
-		WARN_COMPAT_MSG("Spatial input event recieved but no volumetric camera found in scene");
+		loader->active_presses[cur_press_idx] = -1;
+		return;
 	}
 
 	simd_float2 location = simd_make_float2(0.0f, 0.0f);
@@ -428,7 +514,7 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		location = gdrk::to_simd2(volume_camera_3d->unproject_position(gdrk::from_simd3(p_hit_position)));
 	}
 
-	godot::Node *node = loader->get_nodes()->find_node(p_entity_id);
+	godot::Node *node = is_first_press ? loader->get_nodes()->find_node(p_entity_id) : godot::Object::cast_to<godot::Node>(godot::ObjectDB::get_instance(loader->active_press_targets[cur_press_idx].collider_id));
 
 	godot::Ref<godot::InputEventFromWindow> input_event;
 	if (is_first_press || p_ended) {
@@ -436,6 +522,7 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		touch_event.instantiate();
 
 		touch_event->set_index(int32_t(p_event_id));
+		touch_event->set_volume_window_id(loader->volume_id);
 		touch_event->set_pressed(!p_ended);
 		touch_event->set_position(gdrk::from_simd2(location));
 		touch_event->set_world_position(gdrk::from_simd3(p_position));
@@ -464,6 +551,7 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		drag_event.instantiate();
 
 		drag_event->set_index(int32_t(p_event_id));
+		drag_event->set_volume_window_id(loader->volume_id);
 		drag_event->set_position(gdrk::from_simd2(location));
 		drag_event->set_world_position(gdrk::from_simd3(p_position));
 		drag_event->set_relative(relative);
@@ -489,15 +577,24 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 	loader->last_active_press_position[cur_press_idx] = p_position;
 	loader->last_active_press_location[cur_press_idx] = location;
 
+	if (p_ended) {
+		loader->active_presses[cur_press_idx] = -1;
+	}
 	if (node) {
-		loader->push_input_event(gdrk::ColliderInputEventParams{
-				.collider_id = node->get_instance_id(),
-				.camera_id = camera->get_instance_id(),
-				.input_event = input_event,
-				.position = gdrk::from_simd3(p_hit_position),
-				.normal = gdrk::from_simd3(p_hit_normal),
-				.shape_idx = p_hit_shape_idx,
-		});
+		gdrk::ColliderInputEventParams params{
+			.collider_id = node->get_instance_id(),
+			.camera_id = camera->get_instance_id(),
+			.input_event = input_event,
+			.position = gdrk::from_simd3(p_hit_position),
+			.normal = gdrk::from_simd3(p_hit_normal),
+			.shape_idx = p_hit_shape_idx,
+		};
+		if (is_first_press) {
+			loader->active_press_targets[cur_press_idx] = params;
+		} else {
+			params.collider_id = loader->active_press_targets[cur_press_idx].collider_id;
+		}
+		loader->push_input_event(params);
 	}
 }
 
@@ -515,10 +612,16 @@ GDRKTransform GDRKBridgeDelegate::getXROrigin() const {
 }
 
 bool GDRKBridgeDelegate::wantsControllerAnchors() const {
-	return gdrk::RealityControllerXRInterface::get_active() != nullptr;
+	auto *loader = get_loader();
+	return loader && loader->input_enabled && gdrk::RealityControllerXRInterface::get_active() != nullptr;
 }
 
 void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
+	auto *loader = get_loader();
+	// A late view-disappearance callback must not recreate a destroyed tracker.
+	if (!loader || !loader->input_enabled) {
+		return;
+	}
 	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
 	if (controller_interface == nullptr) {
 		return;
@@ -533,11 +636,30 @@ void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransfor
 			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
 			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
 
-	auto *window_root = loader->get_nodes()->window_scene_root;
-	controller_interface->set_anchor_pose(hand, pose, p_tracked, window_root ? window_root->get_instance_id() : 0);
+	controller_interface->set_anchor_pose(hand, pose, p_tracked && loader->input_enabled, loader->volume_id);
 }
 
-void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {
+bool GDRKBridgeDelegate::controllerTrackingEnabled() const {
+	return gdrk::RealityControllerXRInterface::get_active() != nullptr;
+}
+void GDRKBridgeDelegate::setControllerTrackingState(bool running, const char *error) const {
+	if (auto *xr = gdrk::RealityControllerXRInterface::get_active()) {
+		xr->set_tracking_state(running, godot::String::utf8(error));
+	}
+}
+void GDRKBridgeDelegate::setControllerPose(ControllerHand hand, int location, GDRKTransform transform, simd_float3 velocity, simd_float3 angular, int confidence, bool supported) const {
+	auto *loader = get_loader();
+	auto *xr = gdrk::RealityControllerXRInterface::get_active();
+	if (!loader || !xr || !loader->input_enabled || location < 0 || location > 2) {
+		return;
+	}
+	godot::Transform3D pose;
+	pose.basis.set_quaternion(convert(transform.orientation));
+	pose.origin = convert(transform.position);
+	static const char *names[] = { "grip", "aim", "palm" };
+	xr->set_named_pose(loader->volume_id, hand == kLeftHand, names[location], pose, convert(velocity), convert(angular), confidence, supported);
+}
+void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller, uint32_t p_locations) const {
 	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
 	if (controller_interface == nullptr) {
 		return;
@@ -570,14 +692,54 @@ void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_co
 	in.trigger_click = button_pressed(GCInputTrigger);
 	in.grip = button_value(GCInputGripButton);
 	in.grip_click = button_pressed(GCInputGripButton);
-	in.primary_button = button_pressed(GCInputButtonA);
-	in.secondary_button = button_pressed(GCInputButtonB);
+	GCInputButtonName primary = input.buttons[GCInputButtonA] ? GCInputButtonA : GCInputButtonX;
+	GCInputButtonName secondary = input.buttons[GCInputButtonB] ? GCInputButtonB : GCInputButtonY;
+	in.primary_button = button_pressed(primary);
+	in.secondary_button = button_pressed(secondary);
 	in.menu_button = button_pressed(GCInputButtonMenu);
 	id<GCDirectionPadElement> thumbstick = input.dpads[GCInputThumbstick];
 	if (thumbstick != nil) {
 		in.thumbstick = godot::Vector2(thumbstick.xAxis.value, thumbstick.yAxis.value);
 	}
 	in.thumbstick_click = button_pressed(GCInputThumbstickButton);
+
+	auto add_button = [&](GCInputButtonName native, const char *value, const char *click, const char *touch, bool &touched) {
+		id<GCButtonElement> button = input.buttons[native];
+		if (!button) {
+			return;
+		}
+		if (value) {
+			in.supported.push_back(value);
+		}
+		if (click) {
+			in.supported.push_back(click);
+		}
+		if (touch && button.touchedInput) {
+			in.supported.push_back(touch);
+			touched = button.touchedInput.isTouched;
+		}
+	};
+	add_button(GCInputTrigger, "trigger", "trigger_click", "trigger_touch", in.trigger_touch);
+	add_button(GCInputGripButton, "grip", "grip_click", "grip_touch", in.grip_touch);
+	add_button(primary, nullptr, "ax_button", "ax_touch", in.ax_touch);
+	add_button(secondary, nullptr, "by_button", "by_touch", in.by_touch);
+	bool unused = false;
+	add_button(GCInputButtonMenu, nullptr, "menu_button", nullptr, unused);
+	add_button(GCInputThumbstickButton, nullptr, "primary_click", "primary_touch", in.primary_touch);
+	if (thumbstick) {
+		in.supported.push_back("primary");
+	}
+	if (p_locations & 1) {
+		in.poses.push_back("default");
+		in.poses.push_back("grip");
+	}
+	if (p_locations & 2) {
+		in.poses.push_back("aim");
+	}
+	if (p_locations & 4) {
+		in.poses.push_back("palm");
+	}
+	in.haptics = gc_controller.haptics != nil && gc_controller.haptics.supportedLocalities.count > 0;
 
 	const godot::XRPositionalTracker::TrackerHand hand = p_hand == kLeftHand
 			? godot::XRPositionalTracker::TRACKER_HAND_LEFT

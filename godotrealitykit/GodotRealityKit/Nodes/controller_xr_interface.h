@@ -13,17 +13,19 @@
 #define CONTROLLER_XR_INTERFACE_H
 
 #undef check
+#include "window_haptic_mixer.h"
+
+#include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/xr_controller_tracker.hpp>
 #include <godot_cpp/classes/xr_interface_extension.hpp>
+#include <godot_cpp/classes/xr_pose.hpp>
 #include <godot_cpp/classes/xr_positional_tracker.hpp>
-
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2.hpp>
-#include <godot_cpp/classes/node.hpp>
-#include <map>
+
 #include <array>
+#include <map>
 #include <string>
-#include "window_haptic_mixer.h"
 
 namespace gdrk {
 
@@ -64,6 +66,16 @@ public:
 	void set_anchor_pose(godot::XRPositionalTracker::TrackerHand p_hand,
 			const godot::Transform3D &p_pose,
 			bool p_tracked, uint64_t p_window = 0);
+	void suspend_volume(uint64_t p_id);
+	void remove_volume(uint64_t p_id);
+	godot::StringName tracker_for_volume(int64_t p_id, const godot::String &p_hand);
+	bool is_controller_connected(const godot::String &p_hand) const;
+	godot::PackedStringArray get_supported_inputs(const godot::String &p_hand) const;
+	godot::PackedStringArray get_supported_poses(const godot::String &p_hand) const;
+	bool supports_haptics(const godot::String &p_hand) const;
+	void set_tracking_state(bool p_running, const godot::String &p_error);
+	void set_named_pose(uint64_t p_volume, bool p_left, const godot::StringName &p_name, const godot::Transform3D &p_pose,
+			const godot::Vector3 &p_velocity, const godot::Vector3 &p_angular, int p_confidence, bool p_supported);
 	godot::StringName tracker_for_node(godot::Node *p_node, const godot::String &p_hand);
 
 	// A spatial controller's button / thumbstick state, sampled from GCController by the bridge.
@@ -77,27 +89,38 @@ public:
 		bool menu_button = false;
 		godot::Vector2 thumbstick;
 		bool thumbstick_click = false;
+		bool trigger_touch = false, grip_touch = false, primary_touch = false, ax_touch = false, by_touch = false;
+		godot::PackedStringArray supported;
+		godot::PackedStringArray poses;
+		bool haptics = false;
 	};
 
 	// Called from the RealityKit bridge with a controller's latest input; published on the
 	// tracker each _process() so XRController3D's button_pressed / get_input keep working.
 	// p_gc_controller is the GCController backing this hand (see set_controller_input in
-	// extension.mm), kept only to drive _trigger_haptic_pulse; not retained, since the bridge
-	// keeps it alive for as long as it stays connected.
+	// extension.mm), retained until replacement/disconnection to keep asynchronous haptic use safe.
 	void set_controller_input(godot::XRPositionalTracker::TrackerHand p_hand,
 			const ControllerInput &p_input,
 			void *p_gc_controller);
 
 private:
+	struct Pose {
+		godot::Transform3D transform;
+		godot::Vector3 velocity, angular;
+		godot::XRPose::TrackingConfidence confidence = godot::XRPose::XR_TRACKING_CONFIDENCE_NONE;
+		bool supported = false;
+	};
 	struct Controller {
 		godot::Ref<godot::XRControllerTracker> tracker;
 		godot::Transform3D pose;
+		std::map<godot::StringName, Pose> poses;
+		bool suspended = false;
 		bool tracked = false;
 		double updated_at = 0.0;
 		bool pose_published = false;
 		ControllerInput input;
 		bool has_input = false;
-		void *gc_controller = nullptr; // Unretained GCController *, refreshed each frame.
+		void *gc_controller = nullptr; // Retained until replacement or disconnection.
 		void *haptic_player = nullptr; // Retained CHHapticPatternPlayer, stopped on contact exit.
 		void *haptic_engine = nullptr; // Retained CHHapticEngine *, created lazily.
 	};
@@ -121,6 +144,8 @@ private:
 	static RealityControllerXRInterface *active;
 
 	bool initialized = false;
+	bool provider_running = false;
+	const Controller *physical_for_hand(const godot::String &p_hand) const;
 	Controller left;
 	Controller right;
 };

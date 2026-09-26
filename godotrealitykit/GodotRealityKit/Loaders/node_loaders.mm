@@ -9,19 +9,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #import "node_loaders.h"
+
 #include "Nodes/hierarchical_effect.h"
 #include "resource_loaders.h"
+#import "scene_tree.h"
 #import "signposts.h"
 
-#include <cstdio>
 #include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/skeleton3d.hpp>
 #include <godot_cpp/classes/text_server_manager.hpp>
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/engine_ptrcall.hpp>
+
+#include <cstdio>
 
 namespace gdrk {
 
@@ -48,11 +50,10 @@ NodeLoaders::NodeLoaders() :
 }
 
 void NodeLoaders::node_added(godot::Node *p_node) {
-	if (window_scene_root) {
-		if (p_node != window_scene_root && !window_scene_root->is_ancestor_of(p_node)) { return; }
-	} else {
-		for (godot::Node *ancestor = p_node; ancestor; ancestor = ancestor->get_parent()) {
-			if (ancestor->has_meta("_gdrk_window_root")) { return; }
+	if (auto *tree = godot::Object::cast_to<RealitySceneTree>(get_scene_tree())) {
+		auto *owner = tree->get_loader_for_node(p_node);
+		if (!owner || owner->get_nodes() != this) {
+			return;
 		}
 	}
 	const uint64_t node_id = p_node->get_instance_id();

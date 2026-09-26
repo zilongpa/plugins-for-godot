@@ -1,0 +1,63 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<class xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd" name="RealityControllerXRInterface" inherits="XRInterfaceExtension">
+	<brief_description>Shared spatial-controller tracking for RealityKit volumes.</brief_description>
+	<description>Available from [method XRServer.find_interface] as [code]GDRKAccessoryControllerTracker[/code]. Physical controller input and ARKit tracking are shared. Each volume publishes poses in its own Godot coordinate space. Use [XRController3D] and [method XRInterface.trigger_haptic_pulse] with the returned tracker names. No direct mapping to 2D controls is provided. Initialization requires supported hardware; connection does not imply a valid pose. The global tracking status considers all volumes.
+The default pose has grip semantics. When the device supplies them, [code]grip[/code], [code]aim[/code] and [code]palm[/code] (ARKit grip surface) include transformed system linear/angular velocity and tracking confidence. Query supported capabilities instead of assuming every input or pose exists.
+Haptic requests are per tracker. Zero amplitude cancels only that tracker. Overlapping requests on the same physical hand use the strongest amplitude; the strongest request supplies frequency. Closure, destruction, tracking loss and disconnect clear the affected requests. Godot haptic frequency is mapped to system sharpness; exact physical frequency is not guaranteed.</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="tracker_for_node">
+			<return type="StringName" />
+			<param index="0" name="node" type="Node" />
+			<param index="1" name="hand" type="String" />
+			<description>Returns the owning volume tracker for [code]left_hand[/code] or [code]right_hand[/code]. Returns an empty name for an invalid hand, node outside a volume, uninitialized interface or destroying volume.</description>
+		</method>
+		<method name="tracker_for_volume">
+			<return type="StringName" />
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="hand" type="String" />
+			<description>Returns a stable tracker name for the volume and hand. Main names remain [code]left_hand[/code] and [code]right_hand[/code]. Closed volumes retain their names but have invalid poses. Invalid IDs/hands or an uninitialized interface return an empty name.</description>
+		</method>
+		<method name="is_controller_connected" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="hand" type="String" />
+			<description>Returns whether a recognized physical controller is connected for the hand, regardless of volume pose validity. Hand must be left_hand or right_hand.</description>
+		</method>
+		<method name="get_supported_inputs" qualifiers="const">
+			<return type="PackedStringArray" />
+			<param index="0" name="hand" type="String" />
+			<description>Returns inputs actually exposed by the controller. Existing names are trigger, trigger_click, grip, grip_click, primary, primary_click, ax_button, by_button and menu_button. Optional touched states are trigger_touch, grip_touch, primary_touch, ax_touch and by_touch. Hand must be left_hand or right_hand.</description>
+		</method>
+		<method name="get_supported_poses" qualifiers="const">
+			<return type="PackedStringArray" />
+			<param index="0" name="hand" type="String" />
+			<description>Returns the available pose names, including default when grip is supported. Hand must be left_hand or right_hand.</description>
+		</method>
+		<method name="supports_haptics" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="hand" type="String" />
+			<description>Returns whether the connected controller exposes a haptic locality. Hand must be left_hand or right_hand.</description>
+		</method>
+		<method name="log_diagnostic" qualifiers="const">
+			<return type="void" />
+			<param index="0" name="message" type="String" />
+			<description>Writes a message to the native console.</description>
+		</method>
+	</methods>
+	<signals>
+		<signal name="controller_connection_changed">
+			<param index="0" name="hand" type="String" />
+			<param index="1" name="connected" type="bool" />
+			<description>Physical connection changed.</description>
+		</signal>
+		<signal name="controller_capabilities_changed">
+			<param index="0" name="hand" type="String" />
+			<description>Input, pose or haptic capabilities changed; query again.</description>
+		</signal>
+		<signal name="tracking_error">
+			<param index="0" name="message" type="String" />
+			<description>ARKit setup, provider operation or coordinate conversion failed. A failure does not imply a physical disconnect.</description>
+		</signal>
+	</signals>
+</class>

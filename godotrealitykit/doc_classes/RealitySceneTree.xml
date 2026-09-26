@@ -1,11 +1,8 @@
-<?xml version="1.0" encoding="UTF-8" ?>
-<class name="RealitySceneTree" inherits="SceneTree" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
-	<brief_description>
-		Synchronizes Godot scenes with RealityKit and opens additional 3D volumes.
-	</brief_description>
-	<description>
-		This scene tree synchronizes Godot scene changes with RealityKit. On visionOS, an additional volume can run its own scene and [World3D] alongside the main scene.
-	</description>
+<?xml version='1.0' encoding='UTF-8'?>
+<class xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd" name="RealitySceneTree" inherits="SceneTree">
+	<brief_description>Synchronizes Godot scenes and manages independent visionOS volumes.</brief_description>
+	<description>Volume ID 0 identifies the main volumetric scene. Additional IDs increase monotonically and are never reused during this scene tree's lifetime. These IDs are unrelated to [DisplayServer] window IDs. Each additional volume owns a separate scene, [SubViewport], [World3D], camera and input scope. Native 2D windows continue to use [Window].
+[method close_volume_window] keeps the scene and ID; [method destroy_volume_window] releases an additional volume after its native host and rendering work have ended. Methods returning [enum Error] return [constant OK] when accepted, not when presentation has finished. Observe [signal volume_window_state_changed] and [signal volume_window_operation_failed]. Native volume creation requires visionOS and volumetric presentation. System and user control determine placement; this API does not set world positions.</description>
 	<tutorials>
 	</tutorials>
 	<methods>
@@ -13,16 +10,110 @@
 			<return type="int" />
 			<param index="0" name="scene_path" type="String" />
 			<param index="1" name="title" type="String" />
-			<description>
-				Creates an additional volumetric window containing a separate instance of the packed scene at [param scene_path]. Returns its window ID, or [code]-1[/code] if unavailable or the scene cannot be loaded. The scene and its [World3D] remain alive when the window closes.
-			</description>
+			<param index="2" name="options" type="RealityVolumeWindowOptions" default="null" />
+			<description>Instantiates a packed scene and requests a new volume. Returns its ID, or -1 for an unavailable presentation, invalid options or scene load failure. A later native activation failure leaves the allocated volume [constant CLOSED] and retryable. Options are copied before the scene enters the tree.</description>
 		</method>
 		<method name="reopen_volume_window">
-			<return type="void" />
+			<return type="int" enum="Error" />
 			<param index="0" name="window_id" type="int" />
-			<description>
-				Reopens the volume created by [method open_volume_window] with the given ID. An unknown ID has no effect.
-			</description>
+			<description>Requests presentation of the existing scene. Repeated opens coalesce. An open during closing runs after closure completes. Unknown IDs return [constant ERR_DOES_NOT_EXIST].</description>
+		</method>
+		<method name="close_volume_window">
+			<return type="int" enum="Error" />
+			<param index="0" name="window_id" type="int" />
+			<description>Requests closure, invalidates poses and cancels only this volume's haptics. Scene, ID and trackers are retained. A system close has the same result. Unknown IDs return [constant ERR_DOES_NOT_EXIST].</description>
+		</method>
+		<method name="destroy_volume_window">
+			<return type="int" enum="Error" />
+			<param index="0" name="window_id" type="int" />
+			<description>Stops input and destroys an additional volume asynchronously. Removes its trackers and haptic requests. ID 0 returns [constant ERR_UNAVAILABLE]. Repeated destruction requests coalesce. Unknown IDs return [constant ERR_DOES_NOT_EXIST].</description>
+		</method>
+		<method name="get_volume_window_ids" qualifiers="const">
+			<return type="PackedInt64Array" />
+			<description>Returns all retained IDs in ascending order, including closed and destroying volumes.</description>
+		</method>
+		<method name="has_volume_window" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns whether the ID is retained. Remains true until destruction finishes.</description>
+		</method>
+		<method name="get_volume_window_state" qualifiers="const">
+			<return type="int" enum="RealitySceneTree.VolumeWindowState" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns the current lifecycle state, or [constant INVALID] for an unknown ID.</description>
+		</method>
+		<method name="get_volume_window_root" qualifiers="const">
+			<return type="Node" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns the scene root, or null for an invalid ID or a scene that has exited.</description>
+		</method>
+		<method name="get_volume_window_viewport" qualifiers="const">
+			<return type="Viewport" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns the volume viewport, or null for an invalid ID. The main volume uses the root [Window].</description>
+		</method>
+		<method name="get_volume_window_id" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="node" type="Node" />
+			<description>Returns the owning volume ID. Returns -1 for null, detached nodes, or nodes inside ordinary 2D windows.</description>
+		</method>
+		<method name="get_volume_window_title" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns the stored title, or an empty string for an unknown ID.</description>
+		</method>
+		<method name="set_volume_window_title">
+			<return type="int" enum="Error" />
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="title" type="String" />
+			<description>Updates the native scene title and title ornament. Returns [constant ERR_BUSY] during destruction.</description>
+		</method>
+		<method name="get_volume_window_options" qualifiers="const">
+			<return type="RealityVolumeWindowOptions" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns a copy of the applied preferences, or null for an invalid ID. Mutating this copy has no effect until passed to the setter.</description>
+		</method>
+		<method name="set_volume_window_options">
+			<return type="int" enum="Error" />
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="options" type="RealityVolumeWindowOptions" />
+			<description>Copies and applies preferences. Null resets preferences. Initial size is used on the next open; limits, resizing and baseplate visibility update the existing host. Invalid minimum/maximum bounds return [constant ERR_INVALID_PARAMETER].</description>
+		</method>
+		<method name="get_volume_window_size" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="window_id" type="int" />
+			<description>Returns the last system-reported physical extent in meters, independent of the Godot camera/world scale. Zero means no measurement yet or an invalid ID. This is not the requested size.</description>
 		</method>
 	</methods>
+	<signals>
+		<signal name="volume_window_state_changed">
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="state" type="int" />
+			<description>Emitted when a retained volume changes state.</description>
+		</signal>
+		<signal name="volume_window_operation_failed">
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="operation" type="String" />
+			<param index="2" name="error" type="int" />
+			<param index="3" name="message" type="String" />
+			<description>Emitted for a native open, close or configuration failure, or scene load failure (ID -1). A configuration failure does not close the host.</description>
+		</signal>
+		<signal name="volume_window_size_changed">
+			<param index="0" name="window_id" type="int" />
+			<param index="1" name="size" type="Vector3" />
+			<description>Emitted when the physical extent changes. Size is measured in meters.</description>
+		</signal>
+		<signal name="volume_window_destroyed">
+			<param index="0" name="window_id" type="int" />
+			<description>Emitted after the host, scene loader and trackers are detached and the viewport has been deleted. The ID is no longer valid.</description>
+		</signal>
+	</signals>
+	<constants>
+		<constant name="INVALID" value="-1" enum="VolumeWindowState">Unknown or destroyed ID.</constant>
+		<constant name="CLOSED" value="0" enum="VolumeWindowState">Retained scene without an open host.</constant>
+		<constant name="OPENING" value="1" enum="VolumeWindowState">Awaiting native activation.</constant>
+		<constant name="OPEN" value="2" enum="VolumeWindowState">Native host has attached.</constant>
+		<constant name="CLOSING" value="3" enum="VolumeWindowState">Awaiting native closure.</constant>
+		<constant name="DESTROYING" value="4" enum="VolumeWindowState">Input stopped; awaiting safe release.</constant>
+	</constants>
 </class>

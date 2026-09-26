@@ -4,6 +4,7 @@
 		Touch event on visionOS.
 	</brief_description>
 	<description>
+		Cancellation sets the inherited [member InputEventScreenTouch.canceled] flag and clears [member InputEventScreenTouch.pressed]. Closing or destroying a volume cancels active presses whose targets still exist.
 		Maps to a SwiftUI [url=https://developer.apple.com/documentation/swiftui/spatialeventcollection/event]SpatialEventCollection.Event[/url].
 	</description>
 	<tutorials>
@@ -26,6 +27,9 @@
 		</method>
 	</methods>
 	<members>
+		<member name="volume_window_id" type="int" setter="set_volume_window_id" getter="get_volume_window_id" default="-1">
+			Owning RealitySceneTree volume ID. This is separate from the inherited DisplayServer window_id. Positions, rays and orientations use this volume's Godot world coordinates.
+		</member>
 		<member name="chirality" type="int" setter="set_chirality" getter="get_chirality" enum="InputEventSpatialTouch.Chirality" default="1">
 			Which hand produced this event. Only valid when [member has_chirality] is [code]true[/code].
 		</member>
@@ -39,19 +43,19 @@
 			Whether [member selection_ray_origin] and [member selection_ray_direction] contain valid data.
 		</member>
 		<member name="input_device_pose_orientation" type="Quaternion" setter="set_input_device_pose_orientation" getter="get_input_device_pose_orientation" default="Quaternion(0, 0, 0, 1)">
-			Orientation of the input device (hand or controller) in world space. Only valid when [member has_input_device_pose] is [code]true[/code].
+			Orientation of the input device (hand or controller) in the owning volume's Godot world space. Only valid when [member has_input_device_pose] is [code]true[/code].
 		</member>
 		<member name="input_device_pose_position" type="Vector3" setter="set_input_device_pose_position" getter="get_input_device_pose_position" default="Vector3(0, 0, 0)">
-			Position of the input device (hand or controller) in world space. Only valid when [member has_input_device_pose] is [code]true[/code].
+			Position of the input device (hand or controller) in the owning volume's Godot world space. Only valid when [member has_input_device_pose] is [code]true[/code].
 		</member>
 		<member name="selection_ray_direction" type="Vector3" setter="set_selection_ray_direction" getter="get_selection_ray_direction" default="Vector3(0, 0, 0)">
-			Direction of the selection ray in world space. Only valid when [member has_selection_ray] is [code]true[/code].
+			Direction of the selection ray in the owning volume's Godot world space. Only valid when [member has_selection_ray] is [code]true[/code].
 		</member>
 		<member name="selection_ray_origin" type="Vector3" setter="set_selection_ray_origin" getter="get_selection_ray_origin" default="Vector3(0, 0, 0)">
-			Origin of the selection ray in world space. Only valid when [member has_selection_ray] is [code]true[/code].
+			Origin of the selection ray in the owning volume's Godot world space. Only valid when [member has_selection_ray] is [code]true[/code].
 		</member>
 		<member name="world_position" type="Vector3" setter="set_world_position" getter="get_world_position" default="Vector3(0, 0, 0)">
-			Position of the touch in world space.
+			Position of the touch in the owning volume's Godot world space.
 		</member>
 	</members>
 	<constants>

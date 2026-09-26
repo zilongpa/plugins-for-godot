@@ -26,6 +26,8 @@
 
 #include <array>
 #include <functional>
+#include <memory>
+#include <swift/bridging>
 
 namespace gdrk {
 
@@ -61,6 +63,11 @@ struct GDRKTransform {
 	simd_quatf orientation;
 
 	static GDRKTransform identity;
+};
+
+struct GDRKVolumeConfiguration {
+	simd_float3 initial_size, minimum_size, maximum_size, actual_size;
+	int32_t resize_mode, baseplate_visibility;
 };
 
 struct GDRKRay {
@@ -106,11 +113,19 @@ using GDRKColor = UIColor;
 
 using GDRKColorRef = GDRKColor *;
 
+struct GDRKBridgeLifetime {
+	gdrk::SceneLoader *loader = nullptr;
+	uint64_t generation = 0;
+};
+
 class GDRKBridgeDelegate {
 public:
-	explicit GDRKBridgeDelegate(gdrk::SceneLoader *p_loader) {
-		loader = p_loader;
-	}
+	explicit GDRKBridgeDelegate(gdrk::SceneLoader *p_loader);
+	bool isValid() const;
+	void onVolumeWindowEvent(int p_event, const char *p_error) const;
+	void onVolumeSizeChanged(simd_float3 p_meters) const;
+	void cancelSpatialPress(int64_t p_id) const;
+	void on2DWindowFailed(uint64_t p_id, const char *p_error) const;
 
 	void printError(const char *p_msg);
 	void printWarning(const char *p_msg);
@@ -137,7 +152,7 @@ public:
 	UIColor *getBootSplashBgColor() const;
 #endif
 
-	void *getCameraEntity() const;
+	void *getCameraEntity() const SWIFT_RETURNS_INDEPENDENT_VALUE;
 
 	void onWorldScaleChanged(float p_scale) const;
 
@@ -162,7 +177,10 @@ public:
 	// Sample a spatial controller's buttons / thumbstick and publish them on the shared-volume
 	// controller XR interface. p_gc_controller is the GCController as an opaque pointer. Ignored
 	// when that interface isn't running.
-	void setControllerInput(ControllerHand p_hand, void *p_gc_controller) const;
+	void setControllerInput(ControllerHand p_hand, void *p_gc_controller, uint32_t p_locations) const;
+	bool controllerTrackingEnabled() const;
+	void setControllerTrackingState(bool p_running, const char *p_error) const;
+	void setControllerPose(ControllerHand p_hand, int p_pose, GDRKTransform p_transform, simd_float3 p_velocity, simd_float3 p_angular, int p_confidence, bool p_supported) const;
 
 	void onEntityPressUpdate(int64_t p_event_id,
 			bool p_ended,
@@ -179,7 +197,9 @@ public:
 			uint32_t p_chirality) const;
 
 private:
-	mutable gdrk::SceneLoader *loader = nullptr;
+	std::shared_ptr<GDRKBridgeLifetime> lifetime;
+	uint64_t generation = 0;
+	gdrk::SceneLoader *get_loader() const;
 
 	void initialize_phase_manager() const;
 };
