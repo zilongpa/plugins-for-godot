@@ -2,9 +2,10 @@
 
 #include <godot_cpp/classes/control.hpp>
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/popup_menu.hpp>
 
-#include <unordered_map>
-#include <unordered_set>
+#include <map>
+#include <set>
 
 namespace godotvisionos {
 
@@ -22,11 +23,15 @@ class VisionOSHoverRoot2D : public godot::Node {
 		bool operator==(const NativeTarget &p_other) const;
 	};
 
+	using TargetKey = std::pair<uint64_t, int>; // Control: -1; PopupMenu: item index.
+	using TargetSet = std::set<TargetKey>;
 	bool enabled = true;
-	std::unordered_map<uint64_t, NativeTarget> active;
+	std::map<TargetKey, NativeTarget> active;
 
-	void scan(godot::Node *p_node, godot::Viewport *p_viewport, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, std::unordered_set<uint64_t> &r_seen);
+	void scan(godot::Node *p_node, godot::Viewport *p_viewport, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, TargetSet &r_seen);
 	bool make_target(godot::Control *p_control, godot::Viewport *p_viewport, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, NativeTarget &r_target) const;
+	void track_target(const TargetKey &p_key, NativeTarget p_target, TargetSet &r_seen);
+	void scan_popup(godot::PopupMenu *p_popup, godot::Viewport *p_host, int64_t p_controller, const godot::Vector2 &p_offset, const godot::Rect2 &p_host_clip, TargetSet &r_seen);
 	void clear_targets();
 
 protected:

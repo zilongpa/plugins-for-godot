@@ -203,7 +203,7 @@ bool VisionOSHoverRoot2D::make_target(Control *p_control, Viewport *p_viewport, 
 	const TypedArray<Window> subwindows = p_viewport->get_embedded_subwindows();
 	for (int i = 0; i < subwindows.size(); i++) {
 		Window *subwindow = Object::cast_to<Window>(static_cast<Object *>(subwindows[i]));
-		if (subwindow && subwindow->is_visible() && Rect2(subwindow->get_position(), subwindow->get_size()).intersects(local_visible)) {
+		if (subwindow && subwindow->is_visible() && (Object::cast_to<PopupMenu>(subwindow) || Rect2(subwindow->get_position(), subwindow->get_size()).intersects(local_visible))) {
 			return false;
 		}
 	}
@@ -261,7 +261,63 @@ bool VisionOSHoverRoot2D::make_target(Control *p_control, Viewport *p_viewport, 
 	return true;
 }
 
-void VisionOSHoverRoot2D::scan(Node *p_node, Viewport *p_viewport, int64_t p_controller, const Vector2 &p_offset, const Rect2 &p_host_clip, std::unordered_set<uint64_t> &r_seen) {
+void VisionOSHoverRoot2D::track_target(const TargetKey &p_key, NativeTarget p_target, TargetSet &r_seen) {
+	r_seen.insert(p_key);
+	auto existing = active.find(p_key);
+	p_target.native_id = existing == active.end() ? next_native_target_id.fetch_add(1, std::memory_order_relaxed) : existing->second.native_id;
+	if (existing == active.end() || !(existing->second == p_target)) {
+		godotvisionos_hover_update(p_target.native_id, reinterpret_cast<const void *>(p_target.controller), p_target.rect.position.x, p_target.rect.position.y,
+				p_target.rect.size.x, p_target.rect.size.y, p_target.radii[0], p_target.radii[1], p_target.radii[2], p_target.radii[3], p_target.opacity, p_target.effect, p_target.shape);
+		active[p_key] = p_target;
+	}
+}
+
+void VisionOSHoverRoot2D::scan_popup(PopupMenu *p_popup, Viewport *p_host, int64_t p_controller, const Vector2 &p_offset, const Rect2 &p_host_clip, TargetSet &r_seen) {
+	if (!p_popup->has_method("get_item_rect") || p_popup->is_native_menu()) {
+		return;
+	}
+	const Transform2D transform = p_popup->get_final_transform();
+	if (!is_axis_aligned(transform)) {
+		return;
+	}
+	Ref<StyleBoxFlat> style = p_popup->get_theme_stylebox("hover", "PopupMenu");
+	const TypedArray<Window> windows = p_host->get_embedded_subwindows();
+	for (int i = 0; i < p_popup->get_item_count(); i++) {
+		if (p_popup->is_item_disabled(i) || p_popup->is_item_separator(i)) {
+			continue;
+		}
+		const Rect2 full = offset_rect(transform.xform(Rect2(p_popup->call("get_item_rect", i, false))), p_offset);
+		const Rect2 visible = offset_rect(transform.xform(Rect2(p_popup->call("get_item_rect", i, true))), p_offset).intersection(p_host_clip);
+		if (!visible.has_area()) {
+			continue;
+		}
+		bool above_popup = false;
+		bool occluded = false;
+		for (int j = 0; j < windows.size(); j++) {
+			Window *other = Object::cast_to<Window>(static_cast<Object *>(windows[j]));
+			if (other == p_popup) {
+				above_popup = true;
+			} else if (above_popup && other && other->is_visible() && Rect2(other->get_position(), other->get_size()).intersects(visible)) {
+				occluded = true;
+				break;
+			}
+		}
+		if (occluded) {
+			continue;
+		}
+		NativeTarget target;
+		target.controller = p_controller;
+		target.rect = visible;
+		if (style.is_valid() && visible == full) {
+			for (int corner = 0; corner < 4; corner++) {
+				target.radii[corner] = style->get_corner_radius(static_cast<Corner>(corner)) * MIN(transform[0].x, transform[1].y);
+			}
+		}
+		track_target({ p_popup->get_instance_id(), i }, target, r_seen);
+	}
+}
+
+void VisionOSHoverRoot2D::scan(Node *p_node, Viewport *p_viewport, int64_t p_controller, const Vector2 &p_offset, const Rect2 &p_host_clip, TargetSet &r_seen) {
 	if (p_node != this && Object::cast_to<VisionOSHoverRoot2D>(p_node)) {
 		return;
 	}
@@ -284,6 +340,9 @@ void VisionOSHoverRoot2D::scan(Node *p_node, Viewport *p_viewport, int64_t p_con
 				return;
 			}
 			offset += subwindow->get_position();
+			if (auto *popup = Object::cast_to<PopupMenu>(subwindow)) {
+				scan_popup(popup, p_viewport, p_controller, offset, p_host_clip, r_seen);
+			}
 			p_viewport = subwindow;
 		}
 	}
@@ -292,16 +351,8 @@ void VisionOSHoverRoot2D::scan(Node *p_node, Viewport *p_viewport, int64_t p_con
 			return;
 		}
 		NativeTarget target;
-		const uint64_t id = control->get_instance_id();
 		if (make_target(control, p_viewport, p_controller, offset, p_host_clip, target)) {
-			r_seen.insert(id);
-			auto existing = active.find(id);
-			target.native_id = existing == active.end() ? next_native_target_id.fetch_add(1, std::memory_order_relaxed) : existing->second.native_id;
-			if (existing == active.end() || !(existing->second == target)) {
-				godotvisionos_hover_update(target.native_id, reinterpret_cast<const void *>(p_controller), target.rect.position.x, target.rect.position.y,
-						target.rect.size.x, target.rect.size.y, target.radii[0], target.radii[1], target.radii[2], target.radii[3], target.opacity, target.effect, target.shape);
-				active[id] = target;
-			}
+			track_target({ control->get_instance_id(), -1 }, target, r_seen);
 		}
 	}
 	for (int i = 0; i < p_node->get_child_count(); i++) {
@@ -326,13 +377,14 @@ void VisionOSHoverRoot2D::_process(double p_delta) {
 		clear_targets();
 		return;
 	}
-	std::unordered_set<uint64_t> seen;
+	TargetSet seen;
 	const Rect2 host_clip = viewport->get_final_transform().xform(viewport->get_visible_rect());
 	scan(root, viewport, controller, Vector2(), host_clip, seen);
 	const TypedArray<Window> embedded = viewport->get_embedded_subwindows();
 	for (int i = 0; i < embedded.size(); i++) {
 		Window *subwindow = Object::cast_to<Window>(static_cast<Object *>(embedded[i]));
-		if (subwindow && subwindow->is_visible() && !root->is_ancestor_of(subwindow)) {
+		// OptionButton owns an internal PopupMenu, which normal child traversal skips.
+		if (subwindow && subwindow->is_visible()) {
 			scan(subwindow, viewport, controller, Vector2(), host_clip, seen);
 		}
 	}
