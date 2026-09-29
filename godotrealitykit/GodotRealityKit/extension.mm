@@ -131,6 +131,7 @@ void GDRKBridgeDelegate::onVolumeWindowEvent(int event, const char *error) const
 }
 void GDRKBridgeDelegate::on2DWindowFailed(uint64_t id, const char *error) const {
 	ERR_PRINT(godot::String::utf8(error));
+	set2DWindowNativeOpen(id, false);
 	auto *display = godot::DisplayServer::get_singleton();
 	if (!display) {
 		return;
@@ -142,6 +143,48 @@ void GDRKBridgeDelegate::on2DWindowFailed(uint64_t id, const char *error) const 
 	if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
 		window->call_deferred("hide");
 	}
+}
+void GDRKBridgeDelegate::on2DWindowClosed(uint64_t id) const {
+	set2DWindowNativeOpen(id, false);
+	auto *display = godot::DisplayServer::get_singleton();
+	if (!display) return;
+	const uint64_t object_id = display->window_get_attached_instance_id(id);
+	if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
+		window->emit_signal("close_requested");
+		window->call_deferred("hide");
+	}
+}
+void GDRKBridgeDelegate::set2DWindowNativeOpen(uint64_t id, bool open) const {
+	auto *display = godot::DisplayServer::get_singleton();
+	if (!display) return;
+	const uint64_t object_id = display->window_get_attached_instance_id(id);
+	if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
+		window->set_meta(godot::StringName("gdrk_native_open"), open);
+	}
+}
+int32_t GDRKBridgeDelegate::get2DWindowPlacement(uint64_t id) const {
+	const godot::String key = "reality_kit/2d_window_placement";
+	const godot::StringName metadata_key = "gdrk_initial_placement";
+	godot::ProjectSettings *settings = godot::ProjectSettings::get_singleton();
+	godot::String placement = settings->get_setting(key, "Automatic").stringify();
+
+	if (auto *display = godot::DisplayServer::get_singleton()) {
+		const uint64_t object_id = display->window_get_attached_instance_id(id);
+		if (auto *window = godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(object_id))) {
+			if (window->has_meta(metadata_key)) {
+				placement = window->get_meta(metadata_key).stringify();
+			}
+		}
+	}
+
+	if (placement == "Automatic") return 0;
+	if (placement == "Utility Panel") return 1;
+	if (placement == "Leading") return 2;
+	if (placement == "Trailing") return 3;
+	if (placement == "Above") return 4;
+	if (placement == "Below") return 5;
+	WARN_PRINT(godot::String("Unsupported 2D window placement: ") + placement);
+	return 0;
 }
 void GDRKBridgeDelegate::cancelSpatialPress(int64_t id) const {
 	if (auto *loader = get_loader()) {

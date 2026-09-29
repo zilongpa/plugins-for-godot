@@ -126,6 +126,12 @@ public:
 	void onVolumeSizeChanged(simd_float3 p_meters) const;
 	void cancelSpatialPress(int64_t p_id) const;
 	void on2DWindowFailed(uint64_t p_id, const char *p_error) const;
+	void on2DWindowClosed(uint64_t p_id) const;
+	// Runtime state for Godot UI that needs to know when a native 2D scene exists.
+	void set2DWindowNativeOpen(uint64_t p_id, bool p_open) const;
+	// Initial placement for a native Godot Window on visionOS. A Window metadata
+	// override takes precedence over the project's default placement setting.
+	int32_t get2DWindowPlacement(uint64_t p_id) const;
 
 	void printError(const char *p_msg);
 	void printWarning(const char *p_msg);

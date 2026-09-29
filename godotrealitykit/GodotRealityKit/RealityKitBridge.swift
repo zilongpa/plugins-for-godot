@@ -955,10 +955,197 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
     }
 }
 
+// The numeric values match GDRKBridgeDelegate::get2DWindowPlacement. Each mode
+// has its own WindowGroup because defaultWindowPlacement receives the group ID,
+// not the value identifying an individual Godot Window.
+private enum Godot2DPlacement: Int32, CaseIterable {
+    case automatic = 0
+    case utilityPanel = 1
+    case leading = 2
+    case trailing = 3
+    case above = 4
+    case below = 5
+
+    var sceneID: String { "gdrk-2d-\(rawValue)" }
+
+    func placement(in context: WindowPlacementContext) -> WindowPlacement {
+        if self == .utilityPanel { return WindowPlacement(.utilityPanel) }
+        guard let volume = context.windows.first(where: { $0.id == ScenePresentationStyle.sharedVolumetric.rawValue }) else {
+            return WindowPlacement()
+        }
+        switch self {
+        case .leading: return WindowPlacement(.leading(volume))
+        case .trailing: return WindowPlacement(.trailing(volume))
+        case .above: return WindowPlacement(.above(volume))
+        case .below: return WindowPlacement(.below(volume))
+        case .automatic, .utilityPanel: return WindowPlacement()
+        }
+    }
+
+    static func primaryVolumePlacement(in context: WindowPlacementContext) -> WindowPlacement {
+        // If an auxiliary window opened first, place the primary volume on its
+        // opposite side. This makes the order of opening the two windows safe.
+        for window in context.windows {
+            guard let id = window.id,
+                  let mode = allCases.first(where: { $0.sceneID == id }) else { continue }
+            switch mode {
+            case .leading: return WindowPlacement(.trailing(window))
+            case .trailing: return WindowPlacement(.leading(window))
+            case .above: return WindowPlacement(.below(window))
+            case .below: return WindowPlacement(.above(window))
+            case .automatic, .utilityPanel: continue
+            }
+        }
+        return WindowPlacement()
+    }
+}
+
+private struct Godot2DSessionKey: Codable, Hashable {
+    let id: UInt64
+    let generation: UInt64
+}
+
 @MainActor private enum Godot2DWindowRequests {
     static var opened = Set<UInt64>()
     private static var observers: [NSObjectProtocol] = []
     private static var generations: [UInt64: UInt64] = [:]
+    private struct Pending {
+        let mode: Godot2DPlacement
+        let generation: UInt64
+    }
+    private static var pending: [UInt64: Pending] = [:]
+    private static var volumeOpener: (token: UUID, action: OpenWindowAction)?
+    private static var presentedGenerations: [UInt64: UInt64] = [:]
+    private static var windowScenes: [UInt64: UIWindowScene] = [:]
+    private static var disconnectObservers: [UInt64: NSObjectProtocol] = [:]
+
+    static func isCurrent(_ key: Godot2DSessionKey) -> Bool {
+        opened.contains(key.id) && generations[key.id] == key.generation
+    }
+
+    static func markPresented(_ key: Godot2DSessionKey) {
+        if isCurrent(key) {
+            presentedGenerations[key.id] = key.generation
+            Bridge.delegate?.set2DWindowNativeOpen(key.id, true)
+            NSLog("[GDRK 2D Window] presented id=\(key.id) generation=\(key.generation)")
+        }
+    }
+
+    static func attachScene(_ scene: UIWindowScene, to key: Godot2DSessionKey) {
+        guard isCurrent(key), windowScenes[key.id] !== scene else { return }
+        let id = key.id
+        if let old = disconnectObservers.removeValue(forKey: id) {
+            NotificationCenter.default.removeObserver(old)
+        }
+        windowScenes[id] = scene
+        NSLog("[GDRK 2D Window] attached native scene id=\(id) generation=\(key.generation)")
+        let sessionID = scene.session.persistentIdentifier
+        let generation = key.generation
+        disconnectObservers[id] = NotificationCenter.default.addObserver(
+            forName: UIScene.didDisconnectNotification, object: scene, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard windowScenes[id] === scene else { return }
+                windowScenes.removeValue(forKey: id)
+                if let observer = disconnectObservers.removeValue(forKey: id) {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+                Bridge.delegate?.set2DWindowNativeOpen(id, false)
+                NSLog("[GDRK 2D Window] native scene disconnected id=\(id)")
+                verifyDisconnectedSession(id, sessionID: sessionID, generation: generation, attempt: 0)
+            }
+        }
+    }
+
+    private static func verifyDisconnectedSession(_ id: UInt64, sessionID: String, generation: UInt64, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.5 : 1.5)) {
+            MainActor.assumeIsolated {
+                guard opened.contains(id), generations[id] == generation, windowScenes[id] == nil else { return }
+                if UIApplication.shared.openSessions.contains(where: { $0.persistentIdentifier == sessionID }) {
+                    if attempt < 2 { verifyDisconnectedSession(id, sessionID: sessionID, generation: generation, attempt: attempt + 1) }
+                    else { NSLog("[GDRK 2D Window] scene archived; keeping Godot window id=\(id)") }
+                    return
+                }
+                opened.remove(id)
+                pending.removeValue(forKey: id)
+                presentedGenerations.removeValue(forKey: id)
+                generations[id] = generation + 1
+                NSLog("[GDRK 2D Window] native session closed id=\(id)")
+                Bridge.delegate?.set2DWindowNativeOpen(id, false)
+                Bridge.delegate?.on2DWindowClosed(id)
+            }
+        }
+    }
+
+    private static func watchPresentation(_ id: UInt64, generation: UInt64) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+            MainActor.assumeIsolated {
+                guard opened.contains(id), generations[id] == generation,
+                      presentedGenerations[id] != generation, windowScenes[id] == nil else { return }
+                opened.remove(id)
+                pending.removeValue(forKey: id)
+                generations[id] = generation + 1
+                NSLog("[GDRK 2D Window] activation timed out id=\(id)")
+                Bridge.delegate?.set2DWindowNativeOpen(id, false)
+                "The native controls window did not appear".withCString {
+                    Bridge.delegate?.on2DWindowFailed(id, $0)
+                }
+            }
+        }
+    }
+
+    static func registerVolumeOpener(_ action: OpenWindowAction, token: UUID) {
+        volumeOpener = (token, action)
+        let waiting = pending
+        pending.removeAll()
+        for (id, request) in waiting where opened.contains(id) && generations[id] == request.generation {
+            watchPresentation(id, generation: request.generation)
+            action(id: request.mode.sceneID, value: Godot2DSessionKey(id: id, generation: request.generation))
+        }
+    }
+
+    static func unregisterVolumeOpener(token: UUID) {
+        if volumeOpener?.token == token { volumeOpener = nil }
+    }
+
+    private static func openWithUIKit(_ id: UInt64, mode: Godot2DPlacement, generation: UInt64) {
+        let key = Godot2DSessionKey(id: id, generation: generation)
+        guard var request = UISceneSessionActivationRequest(hostingDelegateClass: BridgeScene.self, id: mode.sceneID, value: key) else {
+            opened.remove(id)
+            Bridge.delegate?.set2DWindowNativeOpen(id, false)
+            "Unable to create 2D activation request".withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
+            return
+        }
+        let options = UIWindowScene.ActivationRequestOptions()
+        options.requestingScene = Bridge.volumeWindows[0]?.scene
+        request.options = options
+        watchPresentation(id, generation: generation)
+        UIApplication.shared.activateSceneSession(for: request) { error in
+            guard generations[id] == generation, opened.contains(id),
+                  presentedGenerations[id] != generation, windowScenes[id] == nil else { return }
+            opened.remove(id)
+            Bridge.delegate?.set2DWindowNativeOpen(id, false)
+            error.localizedDescription.withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
+        }
+    }
+
+    private static func scheduleUIKitFallback(_ id: UInt64, generation: UInt64) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            MainActor.assumeIsolated {
+                guard let waiting = pending[id], waiting.generation == generation,
+                      opened.contains(id), generations[id] == generation else { return }
+                // Godot may synchronously import a large file before SwiftUI can
+                // show the primary volume. Keep its request in the queue until
+                // the volume appears or its own activation reports failure.
+                if let volume = Bridge.volumeWindows[0], volume.opening && !volume.finished {
+                    scheduleUIKitFallback(id, generation: generation)
+                    return
+                }
+                pending.removeValue(forKey: id)
+                openWithUIKit(id, mode: waiting.mode, generation: generation)
+            }
+        }
+    }
 
     static func install() {
         guard observers.isEmpty else { return }
@@ -969,15 +1156,19 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
                 guard opened.insert(id).inserted else { return }
                 let generation = (generations[id] ?? 0) + 1
                 generations[id] = generation
-                guard let request = UISceneSessionActivationRequest(hostingDelegateClass: Godot2DWindowScene.self, id: "gdrk-2d", value: id) else {
-                    opened.remove(id)
-                    "Unable to create 2D activation request".withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
-                    return
-                }
-                UIApplication.shared.activateSceneSession(for: request) { error in
-                    guard generations[id] == generation, opened.contains(id) else { return }
-                    opened.remove(id)
-                    error.localizedDescription.withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
+                presentedGenerations.removeValue(forKey: id)
+                Bridge.delegate?.set2DWindowNativeOpen(id, false)
+                let mode = Godot2DPlacement(rawValue: Bridge.delegate?.get2DWindowPlacement(id) ?? 0) ?? .automatic
+                if Bridge.presentationStyle == .sharedVolumetric {
+                    if let action = volumeOpener?.action {
+                        watchPresentation(id, generation: generation)
+                        action(id: mode.sceneID, value: Godot2DSessionKey(id: id, generation: generation))
+                    } else {
+                        pending[id] = Pending(mode: mode, generation: generation)
+                        scheduleUIKitFallback(id, generation: generation)
+                    }
+                } else {
+                    openWithUIKit(id, mode: mode, generation: generation)
                 }
             }
         })
@@ -985,7 +1176,14 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
             guard let id = notification.object as? UInt64 else { return }
             MainActor.assumeIsolated {
                 opened.remove(id)
+                pending.removeValue(forKey: id)
+                presentedGenerations.removeValue(forKey: id)
+                windowScenes.removeValue(forKey: id)
+                if let observer = disconnectObservers.removeValue(forKey: id) {
+                    NotificationCenter.default.removeObserver(observer)
+                }
                 generations[id] = (generations[id] ?? 0) + 1
+                Bridge.delegate?.set2DWindowNativeOpen(id, false)
             }
         })
     }
@@ -1039,33 +1237,59 @@ private struct Godot2DWindowController: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
 }
 
+private struct Godot2DHostObserver: UIViewRepresentable {
+    let key: Godot2DSessionKey
+
+    final class Probe: UIView {
+        var key: Godot2DSessionKey?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let scene = window?.windowScene, let key else { return }
+            Task { @MainActor in Godot2DWindowRequests.attachScene(scene, to: key) }
+        }
+    }
+
+    func makeUIView(context: Context) -> Probe {
+        let view = Probe()
+        view.key = key
+        return view
+    }
+
+    func updateUIView(_ view: Probe, context: Context) { view.key = key }
+}
+
 private struct Godot2DWindow: View {
-    let id: UInt64
+    let key: Godot2DSessionKey
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Godot2DWindowController(id: id)
+        Godot2DWindowController(id: key.id)
             .overlay { GodotViewControllerRepresentable().allowsHitTesting(false) }
+            .background { Godot2DHostObserver(key: key).frame(width: 0, height: 0).allowsHitTesting(false) }
             .ignoresSafeArea()
             .onAppear {
-                if !Godot2DWindowRequests.opened.contains(id) { dismiss() }
+                if Godot2DWindowRequests.isCurrent(key) {
+                    Godot2DWindowRequests.markPresented(key)
+                } else {
+                    dismiss()
+                }
             }
-            .onDisappear { Godot2DWindowRequests.opened.remove(id) }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("org.godotengine.visionos.closeWindow"))) { notification in
-                if notification.object as? UInt64 == id {
-                    Godot2DWindowRequests.opened.remove(id)
+                if notification.object as? UInt64 == key.id {
                     dismiss()
                 }
             }
     }
 }
 
-class Godot2DWindowScene: NSObject, @MainActor UIHostingSceneDelegate {
-    static var rootScene: some SwiftUI.Scene {
-        WindowGroup("Godot 2D", id: "gdrk-2d", for: UInt64.self) { $id in
-            if let id { Godot2DWindow(id: id).modifier(GodotSceneVisibilityBridge()) }
+@MainActor private enum Godot2DWindowScenes {
+    static func windowGroup(_ mode: Godot2DPlacement) -> some SwiftUI.Scene {
+        WindowGroup("Godot 2D", id: mode.sceneID, for: Godot2DSessionKey.self) { $key in
+            if let key { Godot2DWindow(key: key).modifier(GodotSceneVisibilityBridge()) }
         }
         .defaultSize(width: 960, height: 600)
+        .defaultWindowPlacement { _, context in mode.placement(in: context) }
         .restorationBehavior(.disabled)
     }
 }
@@ -1086,6 +1310,7 @@ final class VolumeWindowRecord {
     let delegate: GDRKBridgeDelegate
     let id: UInt64
     let generation: UInt64
+    let openerToken = UUID()
     var title = ""
     var initial = SIMD3<Float>.zero
     var minimum = SIMD3<Float>.zero
@@ -1196,6 +1421,7 @@ private struct VolumeHostObserver: UIViewRepresentable {
 private struct VolumeWindowContent: View {
     let record: VolumeWindowRecord
     @Environment(\.physicalMetrics) private var metrics
+    @Environment(\.openWindow) private var openWindow
     private func points(_ value: Float) -> CGFloat? {
         value > 0 ? metrics.convert(CGFloat(value), from: .meters) : nil
     }
@@ -1227,6 +1453,12 @@ private struct VolumeWindowContent: View {
                 if !record.title.isEmpty { Text(record.title).padding(12).glassBackgroundEffect() }
             }
             .modifier(GodotSceneVisibilityBridge())
+            .onAppear {
+                if record.id == 0 { Godot2DWindowRequests.registerVolumeOpener(openWindow, token: record.openerToken) }
+            }
+            .onDisappear {
+                if record.id == 0 { Godot2DWindowRequests.unregisterVolumeOpener(token: record.openerToken) }
+            }
     }
 }
 
@@ -1252,7 +1484,14 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
         }
         .windowStyle(.volumetric)
         .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, context in Godot2DPlacement.primaryVolumePlacement(in: context) }
         .restorationBehavior(.disabled)
+        Godot2DWindowScenes.windowGroup(.automatic)
+        Godot2DWindowScenes.windowGroup(.utilityPanel)
+        Godot2DWindowScenes.windowGroup(.leading)
+        Godot2DWindowScenes.windowGroup(.trailing)
+        Godot2DWindowScenes.windowGroup(.above)
+        Godot2DWindowScenes.windowGroup(.below)
         WindowGroup(id: ScenePresentationStyle.sharedPortal.rawValue) {
             PortalRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}

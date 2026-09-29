@@ -15,10 +15,33 @@ The plugin adds these settings under **Project > Project Settings > RealityKit**
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `reality_kit/presentation_style` | Enum | Volumetric Window | App presentation mode (Volumetric Window, Portal Window, Immersive) |
+| `reality_kit/2d_window_placement` | Enum | Automatic | Initial placement of native Godot `Window` nodes on visionOS. `Utility Panel` brings the window close; `Leading`, `Trailing`, `Above`, and `Below` place it relative to the primary volumetric window. |
 | `reality_kit/world_environment` | Enum | Automatic | World environment handling (Automatic, Enable, Disable) |
 | `reality_kit/handles_game_controller_events` | Bool | true | Whether the app handles game controller input |
 | `reality_kit/portal_presentation_world_scale` | Float | 0.0 | Fixed world scale for the Portal Window presentation style. When non-zero, this replaces the interactive world scale slider shown in the portal window. |
 | `reality_kit/debug_rendering_on_macos` | Bool | false | Renders through RealityKit when running on macOS, instead of Godot's normal renderer. See [Preview with RealityKit on macOS](#preview-with-realitykit-on-macos). |
+
+To override the project default for one `Window`, set its `gdrk_initial_placement`
+metadata to `Automatic`, `Utility Panel`, `Leading`, `Trailing`, `Above`, or
+`Below`. You can edit metadata in the Window inspector, or set it before showing
+the window from GDScript:
+
+```gdscript
+$ControlsWindow.set_meta("gdrk_initial_placement", "Leading")
+$ControlsWindow.show()
+```
+
+Directional placements refer to the primary RealityKit volume. The same
+relationship applies whether the volume or the 2D window opens first. If the
+other window is not open yet, the system chooses the first window's position;
+the second window is placed relative to it. Initial placement is a preference;
+the person can move windows afterward. These settings have no effect on macOS.
+
+On visionOS, the plugin updates each native `Window` node's read-only
+`gdrk_native_open` metadata. It is `false` while the native scene is opening
+and after it closes, disconnects, or fails; it becomes `true` when the native
+2D scene appears. Use `window.get_meta("gdrk_native_open", false)` when a Godot
+interface needs to show a fallback control until the native window is ready.
 
 ## Preview with RealityKit on macOS
 

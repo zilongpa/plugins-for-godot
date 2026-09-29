@@ -50,6 +50,21 @@ func setup_realitykit_presentation_style():
 		"hint_string": "Volumetric Window,Portal Window,Immersive"
 	})
 
+func setup_2d_window_placement():
+	var key: String = "reality_kit/2d_window_placement"
+	var default: String = "Automatic"
+	if not ProjectSettings.has_setting(key):
+		ProjectSettings.set_setting(key, default)
+	ProjectSettings.set_initial_value(key, default)
+	ProjectSettings.set_as_basic(key, true)
+
+	ProjectSettings.add_property_info({
+		"name": key,
+		"type": TYPE_STRING,
+		"hint": PROPERTY_HINT_ENUM,
+		"hint_string": "Automatic,Utility Panel,Leading,Trailing,Above,Below"
+	})
+
 func setup_realitykit_immersion_style():
 	var key: String = "reality_kit/immersion_style"
 	var default: String = "Mixed"
@@ -108,6 +123,7 @@ func _init():
 
 	setup_setting_handles_game_controller_events()
 	setup_realitykit_presentation_style()
+	setup_2d_window_placement()
 	setup_realitykit_immersion_style()
 	setup_realitykit_worldenvironment()
 	setup_realitykit_portal_world_scale()
