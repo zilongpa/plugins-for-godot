@@ -242,7 +242,11 @@ void SceneLoader::update() {
 	}
 
 #if !TARGET_OS_OSX
-	if (GodotRealityKit::hasOriginalScene() && GodotRealityKit::isSceneVisible()) {
+	// The original UIKit scene is the live Godot controls window in 2D-first
+	// presentation. Only the other styles replace it with a loading scene and
+	// destroy that scene after RealityKit has rendered its first frame.
+	if (GDRKBridgeDelegate(this).getExtensionSettings().presentationStyle != kFlatWindow &&
+			GodotRealityKit::hasOriginalScene() && GodotRealityKit::isSceneVisible()) {
 		[command_buffer waitUntilCompleted];
 		GodotRealityKit::destroyOriginalScene();
 	}
@@ -476,14 +480,19 @@ godot::Error RealitySceneTree::set_volume_window_options(int64_t id, const godot
 void RealitySceneTree::update_loaders() {
 	retire_windows();
 	for (auto &[id, r] : volumes) {
-		if (r.state != DESTROYING && r.loader && get_volume_window_root(id)) {
+		auto *root = get_volume_window_root(id);
+		auto *viewport = get_volume_window_viewport(id);
+		// Opening a volume adds the scene to a SubViewport before adding that
+		// viewport to the SceneTree. Nested frame callbacks can run between the
+		// two steps, when the scene pointer exists but get_viewport() is null.
+		if (r.state != DESTROYING && r.loader && root && viewport && viewport->is_inside_tree() && root->get_viewport() == viewport) {
 			r.loader->update();
 		}
 	}
 }
 int64_t RealitySceneTree::open_volume_window(const godot::String &path, const godot::String &title, const godot::Ref<RealityVolumeWindowOptions> &options) {
 #if TARGET_OS_XR
-	if (!enabled || !loader || extension_settings.presentationStyle != kVolumetricWindow || (options.is_valid() && !options->is_valid())) {
+	if (!enabled || !loader || (extension_settings.presentationStyle != kVolumetricWindow && extension_settings.presentationStyle != kFlatWindow) || (options.is_valid() && !options->is_valid())) {
 		return -1;
 	}
 	godot::Ref<godot::PackedScene> packed = godot::ResourceLoader::get_singleton()->load(path, "PackedScene");
@@ -534,7 +543,7 @@ godot::Error RealitySceneTree::reopen_volume_window(int64_t id) {
 #if !TARGET_OS_XR
 	return godot::ERR_UNAVAILABLE;
 #else
-	if (!enabled || extension_settings.presentationStyle != kVolumetricWindow) {
+	if (!enabled || (extension_settings.presentationStyle != kVolumetricWindow && extension_settings.presentationStyle != kFlatWindow)) {
 		return godot::ERR_UNAVAILABLE;
 	}
 #endif
@@ -570,7 +579,7 @@ godot::Error RealitySceneTree::close_volume_window(int64_t id) {
 #if !TARGET_OS_XR
 	return godot::ERR_UNAVAILABLE;
 #else
-	if (!enabled || extension_settings.presentationStyle != kVolumetricWindow) {
+	if (!enabled || (extension_settings.presentationStyle != kVolumetricWindow && extension_settings.presentationStyle != kFlatWindow)) {
 		return godot::ERR_UNAVAILABLE;
 	}
 #endif
@@ -778,7 +787,10 @@ void RealitySceneTree::_initialize() {
 	{
 		godot::ProjectSettings *ps = godot::ProjectSettings::get_singleton();
 		const char *key = "reality_kit/debug_rendering_on_macos";
-		const bool macos_debug = ps->has_setting(key) && ps->get_setting(key).booleanize();
+		if (!ps->has_setting(key)) {
+			ps->set_setting(key, false);
+		}
+		const bool macos_debug = ps->get_setting_with_override(key).booleanize();
 		if (!macos_debug) {
 			enabled = false;
 		} else if (engine->is_embedded_in_editor()) {
@@ -795,24 +807,24 @@ void RealitySceneTree::_initialize() {
 
 	loader = memnew(SceneLoader);
 	loader->initialize(get_current_scene(), bridge.getRoot());
-	connect("node_added", callable_mp(loader->get_nodes(), &gdrk::NodeLoaders::node_added));
-	connect("node_removed", callable_mp(loader->get_nodes(), &gdrk::NodeLoaders::node_removed));
-
-	auto &main_volume = volumes[0];
-	main_volume.loader = loader;
-	main_volume.root_id = get_current_scene() ? get_current_scene()->get_instance_id() : 0;
-	main_volume.viewport_id = get_root()->get_instance_id();
-	main_volume.options.instantiate();
-	main_volume.state = OPENING;
-	main_volume.desired_open = true;
-	main_volume.native_closed = false;
-	if (get_current_scene()) {
-		get_current_scene()->connect("tree_exiting", callable_mp(this, &RealitySceneTree::volume_root_exiting).bind(0));
-	}
 	GDRKBridgeDelegate bridge_delegate = GDRKBridgeDelegate(loader);
-	bridge.initialize(bridge_delegate);
-
 	extension_settings = bridge_delegate.getExtensionSettings();
+	if (extension_settings.presentationStyle != kFlatWindow) {
+		connect("node_added", callable_mp(loader->get_nodes(), &gdrk::NodeLoaders::node_added));
+		connect("node_removed", callable_mp(loader->get_nodes(), &gdrk::NodeLoaders::node_removed));
+		auto &main_volume = volumes[0];
+		main_volume.loader = loader;
+		main_volume.root_id = get_current_scene() ? get_current_scene()->get_instance_id() : 0;
+		main_volume.viewport_id = get_root()->get_instance_id();
+		main_volume.options.instantiate();
+		main_volume.state = OPENING;
+		main_volume.desired_open = true;
+		main_volume.native_closed = false;
+		if (get_current_scene()) {
+			get_current_scene()->connect("tree_exiting", callable_mp(this, &RealitySceneTree::volume_root_exiting).bind(0));
+		}
+	}
+	bridge.initialize(bridge_delegate);
 
 #if TARGET_OS_XR
 	godot::ProjectSettings *project_settings = godot::ProjectSettings::get_singleton();
@@ -824,7 +836,7 @@ void RealitySceneTree::_initialize() {
 	// A shared volume has no compositor services session, so the engine's ARKit-backed tracker
 	// can't run there. Publish the poses of the controllers' RealityKit accessory anchors
 	// instead.
-	if (controller_tracking_enabled && extension_settings.presentationStyle == kVolumetricWindow) {
+	if (controller_tracking_enabled && (extension_settings.presentationStyle == kVolumetricWindow || extension_settings.presentationStyle == kFlatWindow)) {
 		godot::Ref<RealityControllerXRInterface> accessory_interface;
 		accessory_interface.instantiate();
 		xr_server->add_interface(accessory_interface);
@@ -857,9 +869,10 @@ bool RealitySceneTree::_process(double p_time) {
 	if (!enabled) {
 		return godot::SceneTree::_process(p_time);
 	}
-
 	const godot::RID viewport_rid = get_root()->get_viewport_rid();
-	rendering_server()->viewport_set_update_mode(viewport_rid, godot::RenderingServer::VIEWPORT_UPDATE_DISABLED);
+	if (extension_settings.presentationStyle != kFlatWindow) {
+		rendering_server()->viewport_set_update_mode(viewport_rid, godot::RenderingServer::VIEWPORT_UPDATE_DISABLED);
+	}
 
 	// Early exit if the game is paused while we wait for blocking async tasks
 	godot::SceneTree *scene_tree = this;

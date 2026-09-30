@@ -25,6 +25,7 @@ import UIKit
 
 public enum ScenePresentationStyle : String, Sendable {
     case sharedVolumetric = "shared-volumetric"
+    case primary2D = "primary-2d"
     case sharedPortal = "shared-portal"
     case immersive = "immersive"
 }
@@ -1117,7 +1118,7 @@ private struct Godot2DSessionKey: Codable, Hashable {
             return
         }
         let options = UIWindowScene.ActivationRequestOptions()
-        options.requestingScene = Bridge.volumeWindows[0]?.scene
+        options.requestingScene = Bridge.volumeWindows[0]?.scene ?? Bridge.primary2DScene ?? Bridge.originalScene
         request.options = options
         watchPresentation(id, generation: generation)
         UIApplication.shared.activateSceneSession(for: request) { error in
@@ -1304,6 +1305,60 @@ private struct VolumeSessionKey: Codable, Hashable {
     let generation: UInt64
 }
 
+private struct Primary2DController: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController {
+        guard let controller = Bridge.originalViewController else {
+            assertionFailure("The Godot main view controller is unavailable")
+            return UIViewController()
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIViewController, context: Context) {}
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: UIViewController, context: Context) -> CGSize? {
+        let preferred = Bridge.primary2DDefaultSize
+        let minimum = Bridge.primary2DMinimumSize
+        let width = proposal.width.flatMap { $0.isFinite ? max($0, minimum.width) : nil } ?? preferred.width
+        let height = proposal.height.flatMap { $0.isFinite ? max($0, minimum.height) : nil } ?? preferred.height
+        return CGSize(width: width, height: height)
+    }
+}
+
+private struct Primary2DHostObserver: UIViewRepresentable {
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let scene = window?.windowScene else { return }
+            Task { @MainActor in Bridge.attachPrimary2DScene(scene) }
+        }
+    }
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) {}
+}
+
+private struct Primary2DWindow: View {
+    @Environment(\.openWindow) private var openWindow
+    @State private var openerToken = UUID()
+
+    var body: some View {
+        Primary2DController()
+            .frame(minWidth: Bridge.primary2DMinimumSize.width,
+                   minHeight: Bridge.primary2DMinimumSize.height)
+            .background { Primary2DHostObserver().frame(width: 0, height: 0).allowsHitTesting(false) }
+            .ignoresSafeArea()
+            .modifier(GodotSceneVisibilityBridge())
+            .onAppear {
+                Bridge.registerPrimary2DOpener(openWindow, token: openerToken)
+                Godot2DWindowRequests.registerVolumeOpener(openWindow, token: openerToken)
+            }
+            .onDisappear {
+                Bridge.unregisterPrimary2DOpener(token: openerToken)
+                Godot2DWindowRequests.unregisterVolumeOpener(token: openerToken)
+            }
+    }
+}
+
 @MainActor @Observable
 final class VolumeWindowRecord {
     let root: RealityKit.Entity
@@ -1362,6 +1417,10 @@ final class VolumeWindowRecord {
     func close() {
         closeRequested = true
         guard let scene else {
+            if Bridge.presentationStyle == .primary2D && Bridge.cancelPendingPrimary2DVolume(self) {
+                opening = false; finished = true; report(1)
+                return
+            }
             if !opening { finished = true; report(1) }
             return
         }
@@ -1388,6 +1447,10 @@ final class VolumeWindowRecord {
     func open() {
         guard !opening, scene == nil else { return }
         opening = true
+        if Bridge.presentationStyle == .primary2D {
+            Bridge.openPrimary2DVolume(self)
+            return
+        }
         let key = VolumeSessionKey(id: id, generation: generation)
         guard let request = UISceneSessionActivationRequest(hostingDelegateClass: AdditionalVolumeScene.self, id: "gdrk-extra-volume", value: key) else {
             opening = false; finished = true; report(2, "Unable to create volume activation request"); return
@@ -1447,7 +1510,11 @@ private struct VolumeWindowContent: View {
                    minHeight: lower(1), idealHeight: points(record.initial.y), maxHeight: upper(1))
             .frame(minDepth: lower(2), idealDepth: points(record.initial.z), maxDepth: upper(2))
             .volumeBaseplateVisibility(record.baseplate == 1 ? .visible : (record.baseplate == 2 ? .hidden : .automatic))
-            .overlay { GodotViewControllerRepresentable() }
+            .overlay {
+                if Bridge.presentationStyle != .primary2D {
+                    GodotViewControllerRepresentable()
+                }
+            }
             .background { VolumeHostObserver(record: record).frame(width: 0, height: 0).allowsHitTesting(false) }
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 if !record.title.isEmpty { Text(record.title).padding(12).glassBackgroundEffect() }
@@ -1478,7 +1545,35 @@ class AdditionalVolumeScene: NSObject, @MainActor UIHostingSceneDelegate {
 }
 
 class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
+    private static var primary2DWindowScene: some SwiftUI.Scene {
+        let size = Bridge.primary2DDefaultSize
+        return Window("Godot Controls", id: ScenePresentationStyle.primary2D.rawValue) {
+            Primary2DWindow()
+        }
+        .defaultSize(width: size.width, height: size.height)
+        .windowStyle(.plain)
+        .windowResizability(.contentMinSize)
+        .restorationBehavior(.disabled)
+    }
+
     static var rootScene: some SwiftUI.Scene {
+        primary2DWindowScene
+        WindowGroup("Godot 3D", id: "gdrk-primary-2d-volume", for: VolumeSessionKey.self) { $key in
+            if let key, let record = Bridge.volumeWindows[key.id], record.generation == key.generation {
+                VolumeWindowContent(record: record)
+            } else {
+                StaleVolumeWindow()
+            }
+        }
+        .windowStyle(.volumetric)
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, context in
+            guard let controls = context.windows.first(where: { $0.id == ScenePresentationStyle.primary2D.rawValue }) else {
+                return WindowPlacement()
+            }
+            return WindowPlacement(.trailing(controls))
+        }
+        .restorationBehavior(.disabled)
         WindowGroup(id: ScenePresentationStyle.sharedVolumetric.rawValue) {
             if let record = Bridge.volumeWindows[0] { VolumeWindowContent(record: record) }
         }
@@ -1523,6 +1618,18 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
 
     public func sceneDidBecomeActive(_ scene: UIScene) {
         Bridge.resumeGodotAudioAfterActivatingSession()
+    }
+
+    public func sceneDidDisconnect(_ scene: UIScene) {
+        guard Bridge.presentationStyle == .primary2D,
+              Bridge.primary2DScene === scene else { return }
+        Bridge.primary2DScene = nil
+        // Keep the Files and playback controls available while a model volume
+        // is still open, even if visionOS closes the 2D host unexpectedly.
+        let modelRemains = Bridge.volumeWindows.values.contains { $0.scene != nil || $0.opening }
+        if modelRemains {
+            DispatchQueue.main.async { Bridge.reopenPrimary2DWindow() }
+        }
     }
 
     public func sceneWillResignActive(_ scene: UIScene) {
@@ -1603,6 +1710,32 @@ public class Bridge {
     #if !os(macOS)
     @MainActor static var originalScene: UIWindowScene? = nil
     @MainActor static var originalViewController: UIViewController? = nil
+    @MainActor static var primary2DScene: UIWindowScene? = nil
+    @MainActor private static var primary2DReopenPending = false
+    @MainActor static var primary2DPreferredSize: CGSize? = nil
+    @MainActor static var primary2DDefaultSize: CGSize {
+        if let initial = delegate?.getPrimary2DInitialSize(), initial.x > 0, initial.y > 0 {
+            return CGSize(width: CGFloat(initial.x), height: CGFloat(initial.y))
+        }
+        let size = primary2DPreferredSize ?? originalScene?.keyWindow?.bounds.size
+            ?? originalViewController?.viewIfLoaded?.bounds.size
+        if let size, size.width > 0, size.height > 0 { return size }
+        if let sceneSize = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.coordinateSpace.bounds.size })
+            .first(where: { $0.width > 0 && $0.height > 0 }) {
+            return sceneSize
+        }
+        preconditionFailure("GodotRealityKit: no native scene size for the primary 2D window")
+    }
+    @MainActor static var primary2DMinimumSize: CGSize {
+        let requested = delegate?.getPrimary2DMinimumSize()
+        return CGSize(
+            width: requested.flatMap { $0.x > 0 ? CGFloat($0.x) : nil } ?? 0,
+            height: requested.flatMap { $0.y > 0 ? CGFloat($0.y) : nil } ?? 0
+        )
+    }
+    @MainActor private static var primary2DOpener: (token: UUID, action: OpenWindowAction)? = nil
+    @MainActor private static var pendingPrimary2DVolumes: [UInt64: VolumeWindowRecord] = [:]
     @MainActor static var bootSplashImage: UIImage? = nil
     @MainActor static var bootSplashBgColor: UIColor = .black
     @MainActor static var audioInterruptionObserver: Any? = nil
@@ -1611,8 +1744,74 @@ public class Bridge {
     #if !os(macOS)
     @MainActor static var volumeWindows: [UInt64: VolumeWindowRecord] = [:]
     @MainActor private static var operationDriver: GodotViewController?
+
+    @MainActor static func registerPrimary2DOpener(_ action: OpenWindowAction, token: UUID) {
+        primary2DOpener = (token, action)
+        let waiting = pendingPrimary2DVolumes
+        pendingPrimary2DVolumes.removeAll()
+        for record in waiting.values where record.opening && !record.finished && !record.closeRequested {
+            action(id: "gdrk-primary-2d-volume", value: VolumeSessionKey(id: record.id, generation: record.generation))
+            record.watchActivation()
+        }
+    }
+
+    @MainActor static func unregisterPrimary2DOpener(token: UUID) {
+        if primary2DOpener?.token == token { primary2DOpener = nil }
+    }
+
+    @MainActor static func openPrimary2DVolume(_ record: VolumeWindowRecord) {
+        if let action = primary2DOpener?.action {
+            action(id: "gdrk-primary-2d-volume", value: VolumeSessionKey(id: record.id, generation: record.generation))
+            record.watchActivation()
+        } else {
+            pendingPrimary2DVolumes[record.id] = record
+        }
+    }
+
+    @MainActor static func cancelPendingPrimary2DVolume(_ record: VolumeWindowRecord) -> Bool {
+        guard pendingPrimary2DVolumes[record.id] === record else { return false }
+        pendingPrimary2DVolumes.removeValue(forKey: record.id)
+        return true
+    }
+
+    @MainActor static func attachPrimary2DScene(_ scene: UIWindowScene) {
+        guard primary2DScene !== scene else { return }
+        primary2DScene = scene
+        primary2DReopenPending = false
+        // Godot applied its original size restrictions to the splash scene.
+        // Reapply them after the same view controller joins this new scene.
+        DispatchQueue.main.async {
+            guard Self.primary2DScene === scene,
+                  Self.originalViewController?.viewIfLoaded?.window?.windowScene === scene else { return }
+            Self.delegate?.syncPrimary2DWindowGeometry()
+        }
+        guard let old = originalScene, old !== scene else { return }
+        // The same GDTViewController now lives in the SwiftUI controls scene.
+        // Destroy only the original splash scene; destroying its controller
+        // would also remove Godot's native FileDialog host and display link.
+        originalScene = nil
+        UIApplication.shared.requestSceneSessionDestruction(old.session, options: nil) { error in
+            NSLog("GodotRealityKit: unable to dismiss original 2D scene: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor static func reopenPrimary2DWindow() {
+        guard presentationStyle == .primary2D, primary2DScene == nil, !primary2DReopenPending,
+              let request = UISceneSessionActivationRequest(
+                hostingDelegateClass: BridgeScene.self, id: ScenePresentationStyle.primary2D.rawValue
+              ) else { return }
+        primary2DReopenPending = true
+        UIApplication.shared.activateSceneSession(for: request) { error in
+            primary2DReopenPending = false
+            NSLog("GodotRealityKit: unable to restore controls window: \(error.localizedDescription)")
+        }
+    }
+
     public static func setVolumeRequestsPending(_ pending: Bool) {
         MainActor.assumeIsolated {
+            // In primary 2D mode the original Godot view controller already
+            // owns the display link and drives volume lifecycle callbacks.
+            if presentationStyle == .primary2D { return }
             if pending {
                 if operationDriver == nil { operationDriver = GodotViewController() }
                 operationDriver?.startRendering()
@@ -1679,11 +1878,6 @@ public class Bridge {
     public static func initialize(delegate: GDRKBridgeDelegate) {
         assumeMainActor(delegate) { delegate in
             Self.delegate = delegate
-            #if !os(macOS)
-            Godot2DWindowRequests.install()
-            volumeWindows[0] = VolumeWindowRecord(root: Self.root.value, delegate: delegate, id: 0, generation: 0)
-            volumeWindows[0]?.opening = true
-            #endif
             _ = Self.root
 
             let settings = delegate.getExtensionSettings()
@@ -1693,9 +1887,18 @@ public class Bridge {
                 case .immersive: return .immersive
                 case .volumetricPortal: return .sharedPortal
                 case .volumetricWindow: return .sharedVolumetric
+                case .flatWindow: return .primary2D
                 @unknown default: return .sharedVolumetric
                 }
             }()
+
+            #if !os(macOS)
+            Godot2DWindowRequests.install()
+            if Self.presentationStyle == .sharedVolumetric {
+                volumeWindows[0] = VolumeWindowRecord(root: Self.root.value, delegate: delegate, id: 0, generation: 0)
+                volumeWindows[0]?.opening = true
+            }
+            #endif
 
             Self.immersionStyle = {
                 switch settings.immersionStyle {
@@ -1709,6 +1912,10 @@ public class Bridge {
 
 #if os(macOS)
         assumeMainActor(self, delegate){ s, delegate in
+            if s.presentationStyle == .primary2D {
+                s.sceneVisible = true
+                return
+            }
             let rkViewHost =
                 NSHostingController(
                     rootView: DesktopRealityView(root: s.root.value,
@@ -1745,8 +1952,16 @@ public class Bridge {
             // deallocated when the UIScene is destroyed
             Self.originalScene = originalScene
             Self.originalViewController = delegate.getDisplayServerViewController()
+            if Self.presentationStyle == .primary2D {
+                Self.primary2DPreferredSize = originalScene.keyWindow?.bounds.size
+            }
             Self.bootSplashImage = delegate.getBootSplashImage()
             Self.bootSplashBgColor = delegate.getBootSplashBgColor()
+
+            // For 2D-first presentation, keep the existing GDTViewController
+            // alive and move it into a SwiftUI window. The controller remains
+            // Godot window ID 0, including its native FileDialog host. A
+            // SwiftUI host gives additional volumes a placement anchor.
 
             // The scene transition below may interrupt the AVAudioSession.
             // Godot's own interruption handler calls on_focus_in() when the
@@ -1771,8 +1986,9 @@ public class Bridge {
                 }
             }
 
-            // Set the original godot plain window to a simple view showing just the loading screen
-            // Setting the root view controller here secretly unlinks the display link, stopping the game loop
+            // Show a splash in the original UIKit scene while opening its
+            // SwiftUI replacement. The original GDTViewController is retained
+            // and used again by Primary2DController in 2D-first presentation.
             originalScene.keyWindow?.rootViewController = LoadingViewController()
 
             NotificationCenter.default.addObserver(
@@ -1795,7 +2011,20 @@ public class Bridge {
     }
 
     public static func isSceneVisible() -> Bool {
-        MainActor.assumeIsolated{ Self.sceneVisible }
+        MainActor.assumeIsolated {
+            #if !os(macOS)
+            if Self.presentationStyle == .primary2D {
+                let primaryVisible = Self.originalScene.map {
+                    $0.activationState != .background && $0.activationState != .unattached
+                } ?? false
+                let hostedVisible = Self.primary2DScene.map {
+                    $0.activationState != .background && $0.activationState != .unattached
+                } ?? false
+                return primaryVisible || hostedVisible || Self.sceneVisible
+            }
+            #endif
+            return Self.sceneVisible
+        }
     }
 
 #if !os(macOS)
@@ -1816,7 +2045,10 @@ public class Bridge {
         }
 
         Self.originalScene = newScene
-        newScene.keyWindow?.rootViewController = LoadingViewController()
+        Self.originalViewController = newScene.keyWindow?.rootViewController
+        if Self.presentationStyle != .primary2D {
+            newScene.keyWindow?.rootViewController = LoadingViewController()
+        }
     }
 
     static func resumeGodotAudioAfterActivatingSession() {

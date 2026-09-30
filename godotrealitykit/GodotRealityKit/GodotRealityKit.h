@@ -85,7 +85,8 @@ struct GDRKIntersectionInfo {
 typedef NS_ENUM(NSUInteger, PresentationStyle) {
 	kVolumetricWindow,
 	kVolumetricPortal,
-	kImmersive
+	kImmersive,
+	kFlatWindow
 };
 
 typedef NS_ENUM(NSUInteger, ImmersionStyle) {
@@ -154,6 +155,14 @@ public:
 	NSWindow *getDisplayServerWindow() const;
 #else
 	UIViewController *getDisplayServerViewController() const;
+	// Initial native window size in visionOS points. Window size overrides
+	// take precedence over the logical viewport size, as they do in Godot.
+	simd_float2 getPrimary2DInitialSize() const;
+	// Godot's root-window minimum, converted from pixels to visionOS points.
+	simd_float2 getPrimary2DMinimumSize() const;
+	// Reapply the root window's current min/max and resize restrictions after
+	// moving Godot's view controller into the SwiftUI window scene.
+	void syncPrimary2DWindowGeometry() const;
 	UIImage *getBootSplashImage() const;
 	UIColor *getBootSplashBgColor() const;
 #endif

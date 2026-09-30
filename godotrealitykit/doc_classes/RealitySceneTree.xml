@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <class xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd" name="RealitySceneTree" inherits="SceneTree">
 	<brief_description>Synchronizes Godot scenes and manages independent visionOS volumes.</brief_description>
-	<description>Volume ID 0 identifies the main volumetric scene. Additional IDs increase monotonically and are never reused during this scene tree's lifetime. These IDs are unrelated to [DisplayServer] window IDs. Each additional volume owns a separate scene, [SubViewport], [World3D], camera and input scope. Native 2D windows continue to use [Window].
-[method close_volume_window] keeps the scene and ID; [method destroy_volume_window] releases an additional volume after its native host and rendering work have ended. Methods returning [enum Error] return [constant OK] when accepted, not when presentation has finished. Observe [signal volume_window_state_changed] and [signal volume_window_operation_failed]. Native volume creation requires visionOS and volumetric presentation. System and user control determine placement; this API does not set world positions.</description>
+	<description>In Volumetric Window presentation, volume ID 0 identifies the main volumetric scene. In 2D Window presentation, the root viewport remains a native 2D window and there is no volume ID 0. Additional volume IDs increase monotonically and are never reused during this scene tree's lifetime. These IDs are unrelated to [DisplayServer] window IDs. Each additional volume owns a separate scene, [SubViewport], [World3D], camera and input scope. Native 2D windows continue to use [Window].
+[method close_volume_window] keeps the scene and ID; [method destroy_volume_window] releases an additional volume after its native host and rendering work have ended. Methods returning [enum Error] return [constant OK] when accepted, not when presentation has finished. Observe [signal volume_window_state_changed] and [signal volume_window_operation_failed]. Native volume creation requires visionOS and either Volumetric Window or 2D Window presentation. In 2D Window presentation, the plugin initially places volumes beside the main controls window. The person can move windows afterward; this API does not set world positions.</description>
 	<tutorials>
 	</tutorials>
 	<methods>
@@ -11,7 +11,7 @@
 			<param index="0" name="scene_path" type="String" />
 			<param index="1" name="title" type="String" />
 			<param index="2" name="options" type="RealityVolumeWindowOptions" default="null" />
-			<description>Instantiates a packed scene and requests a new volume. Returns its ID, or -1 for an unavailable presentation, invalid options or scene load failure. A later native activation failure leaves the allocated volume [constant CLOSED] and retryable. Options are copied before the scene enters the tree.</description>
+			<description>Instantiates a packed scene and requests a new volume. Returns its ID, or -1 for an unavailable presentation, invalid options or scene load failure. A later native activation failure leaves the allocated volume [constant CLOSED] and retryable. Options are copied before the scene enters the tree. When this method is called during another scene's [method Node._ready], the new volume root may not yet be ready when the method returns; await the root's [signal Node.ready] before using its @onready references.</description>
 		</method>
 		<method name="reopen_volume_window">
 			<return type="int" enum="Error" />
@@ -45,12 +45,12 @@
 		<method name="get_volume_window_root" qualifiers="const">
 			<return type="Node" />
 			<param index="0" name="window_id" type="int" />
-			<description>Returns the scene root, or null for an invalid ID or a scene that has exited.</description>
+			<description>Returns the scene root, or null for an invalid ID or a scene that has exited. The root can be returned before its [signal Node.ready] signal has fired.</description>
 		</method>
 		<method name="get_volume_window_viewport" qualifiers="const">
 			<return type="Viewport" />
 			<param index="0" name="window_id" type="int" />
-			<description>Returns the volume viewport, or null for an invalid ID. The main volume uses the root [Window].</description>
+			<description>Returns the volume viewport, or null for an invalid ID. The main volume in Volumetric Window presentation uses the root [Window].</description>
 		</method>
 		<method name="get_volume_window_id" qualifiers="const">
 			<return type="int" />

@@ -3,18 +3,15 @@
 The bundled RealityKit platform demo and a GLB flipbook scene have been displayed
 on an Apple Silicon Mac in visionOS 27 Simulator. This is an experimental development
 path, not complete simulator support for all Godot renderers or plugin features.
-The default SCons/addon export flow still builds device libraries only.
+The default SCons/addon build packages both device and Simulator libraries.
 
 ## Requirements and scope
 
 - Xcode 27 with visionOS Simulator SDK and runtime, plus the Metal toolchain.
 - A working Debug build of this plugin and its pinned Godot/godot-cpp dependencies
-  following [Building](Building.md). The commands below run from `godotrealitykit/`
-  and use the `deps` symlink created by the normal framework build.
-- Godot commit `30ccda47f9980e47a7e1cd9c19943ab2a54362f4`, as specified in `deps.conf`.
-- An **isolated copy** of a Debug visionOS Xcode export. Packaging below replaces
-  its plugin framework with a simulator-only framework; do not use that copy for
-  device deployment or distribution.
+  following [Building](Building.md). Run the commands below from `godotrealitykit/`.
+- The exact Godot and godot-cpp commits specified in `deps.conf`.
+- A Debug visionOS Xcode export made with the matching editor, addon and template.
 
 The shared GPU code is in the external Godot dependency, not this plugin repo.
 The pinned [Godot fork](https://github.com/zilongpa/godot) already includes the
@@ -23,67 +20,27 @@ simulator changes, based on rsanchezsaez/godot commit
 `patches/godot-visionos-simulator.patch` is retained only as a reference diff
 against that upstream commit; do not apply it to the configured fork.
 
-## Build the simulator libraries
+## Build and export
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-GDRK_ROOT="$PWD"
-GDRK_DEPS="$(cd deps && pwd)"
-
-test "$(git -C "$GDRK_DEPS/godot" rev-parse HEAD)" = 30ccda47f9980e47a7e1cd9c19943ab2a54362f4
-
-scons -C "$GDRK_DEPS/godot" -j4 platform=visionos target=template_debug \
-    simulator=yes arch=arm64 generate_bundle=no vulkan=false \
-    SWIFT_FRONTEND="$GDRK_ROOT/scripts/build/swift-frontend-wrapper.sh"
-
-scons -C "$GDRK_DEPS/godot-cpp" -j4 platform=visionos target=template_debug \
-    arch=arm64 ios_simulator=yes visionos_min_version=26.0 \
-    custom_api_file="$GDRK_DEPS/extension_api.json" \
-    custom_tools="$GDRK_ROOT/tools" use_hot_reload=no
-
-xcodebuild build -jobs 3 \
-    -project GodotRealityKit/GodotRealityKit.xcodeproj \
-    -scheme GodotRealityKit -configuration Debug \
-    -sdk xrsimulator -destination 'generic/platform=visionOS Simulator' \
-    -derivedDataPath "$GDRK_ROOT/out/simulator" CODE_SIGNING_ALLOWED=NO
+scons -j4 config=debug
+test "$(git -C deps/godot rev-parse HEAD)" = "$(sed -n 's/^GODOT_BRANCH=//p' deps.conf)"
+test "$(git -C deps/godot-cpp rev-parse HEAD)" = "$(sed -n 's/^GODOT_CPP_BRANCH=//p' deps.conf)"
 ```
 
-If reusing a shared workspace, verify that its Godot checkout matches the pinned
-commit above. An existing workspace may still contain the old upstream checkout;
-update it deliberately and preserve any local edits before building.
+The addon is at `out/addons/GodotRealityKit/`. Its
+`visionos.template_debug/GodotRealityKit.xcframework` contains both
+`xros-arm64` and `xros-arm64-simulator`; the same directory contains the
+matching `godot_visionos.zip` export template. Export with the matching editor
+at `deps/godot/bin/godot.macos.editor.dev.arm64`.
 
 `ios_simulator=yes` is the existing godot-cpp switch that adds `.simulator` to
 object/library names. Our visionOS tool also uses it to select the **visionOS**
 simulator SDK and target triple; it does not build an iOS library. Keeping the
 suffix separates device and simulator outputs despite both using arm64.
-
-## Package an isolated Xcode export
-
-Export a project with the matching Godot editor and Debug addon first. Replace
-these example paths/names with the isolated export and its existing binary name:
-
-```sh
-GDRK_EXPORT="$GDRK_ROOT/out/mygame-simulator"
-GDRK_BINARY=mygame
-GDRK_FRAMEWORK="$GDRK_ROOT/out/simulator/Build/Products/Debug-xrsimulator/GodotRealityKit.framework"
-
-mkdir -p "$GDRK_EXPORT/$GDRK_BINARY.xcframework/xros-arm64-simulator"
-cp "$GDRK_DEPS/godot/bin/libgodot.visionos.template_debug.arm64.simulator.a" \
-    "$GDRK_EXPORT/$GDRK_BINARY.xcframework/xros-arm64-simulator/libgodot.a"
-ditto "$GDRK_FRAMEWORK" \
-    "$GDRK_EXPORT/$GDRK_BINARY/dylibs/addons/GodotRealityKit/visionos.template_debug/GodotRealityKit.framework"
-
-xcodebuild build -jobs 3 \
-    -project "$GDRK_EXPORT/$GDRK_BINARY.xcodeproj" -scheme "$GDRK_BINARY" \
-    -configuration Debug -sdk xrsimulator \
-    -destination 'generic/platform=visionOS Simulator' \
-    -derivedDataPath "$GDRK_ROOT/out/simulator-app" CODE_SIGNING_ALLOWED=NO
-```
-
-The pinned export template's XCFramework Info.plist already declares
-`xros-arm64-simulator`; the library directory is missing until this packaging
-step. Verify that declaration if using another export template. Do not rename a
-device binary to make it appear to be a simulator binary.
+The export uses the matching engine template's Simulator slice and embeds the
+plugin XCFramework. No manual library replacement is needed.
 
 ## Run the simulator build
 

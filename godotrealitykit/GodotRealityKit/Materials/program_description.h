@@ -18,6 +18,7 @@
 #include <godot_cpp/classes/base_material3d.hpp>
 #include <godot_cpp/classes/shader_material.hpp>
 #include <godot_cpp/classes/visual_shader.hpp>
+#include <godot_cpp/core/math_funcs_binary.hpp>
 
 #include <format>
 
@@ -122,16 +123,16 @@ struct BaseMaterial3DDescription {
 	using BM = godot::BaseMaterial3D;
 	godot::RID next_pass = godot::RID();
 	int32_t render_priority = 0;
-	uint32_t shading_mode : godot::get_num_bits(BM::SHADING_MODE_MAX - 1) = BM::SHADING_MODE_PER_PIXEL;
-	uint32_t transparency : godot::get_num_bits(BM::TRANSPARENCY_MAX - 1) = BM::TRANSPARENCY_DISABLED;
-	uint32_t blend_mode : godot::get_num_bits(BM::BLEND_MODE_PREMULT_ALPHA - 0) = BM::BLEND_MODE_MIX;
-	uint32_t cull_mode : godot::get_num_bits(BM::CULL_DISABLED - 0) = BM::CULL_BACK;
-	uint32_t depth_draw_mode : godot::get_num_bits(BM::DEPTH_DRAW_DISABLED - 0) = BM::DEPTH_DRAW_OPAQUE_ONLY;
-	uint32_t billboard_mode : godot::get_num_bits(BM::BILLBOARD_PARTICLES - 0) = BM::BILLBOARD_DISABLED;
-	uint32_t texture_filter : godot::get_num_bits(BM::TEXTURE_FILTER_MAX - 1) = BM::TEXTURE_FILTER_LINEAR_WITH_MIPMAPS;
-	uint32_t detail_blend_mode : godot::get_num_bits(BM::BLEND_MODE_PREMULT_ALPHA - 0) = BM::BLEND_MODE_MIX;
-	uint32_t detail_uv_layer : godot::get_num_bits(BM::DETAIL_UV_2 - 0) = BM::DETAIL_UV_1;
-	uint32_t distance_fade : godot::get_num_bits(BM::DISTANCE_FADE_OBJECT_DITHER - 0) = BM::DISTANCE_FADE_DISABLED;
+	uint32_t shading_mode : godot::Math::get_num_bits(BM::SHADING_MODE_MAX - 1) = BM::SHADING_MODE_PER_PIXEL;
+	uint32_t transparency : godot::Math::get_num_bits(BM::TRANSPARENCY_MAX - 1) = BM::TRANSPARENCY_DISABLED;
+	uint32_t blend_mode : godot::Math::get_num_bits(BM::BLEND_MODE_PREMULT_ALPHA - 0) = BM::BLEND_MODE_MIX;
+	uint32_t cull_mode : godot::Math::get_num_bits(BM::CULL_DISABLED - 0) = BM::CULL_BACK;
+	uint32_t depth_draw_mode : godot::Math::get_num_bits(BM::DEPTH_DRAW_DISABLED - 0) = BM::DEPTH_DRAW_OPAQUE_ONLY;
+	uint32_t billboard_mode : godot::Math::get_num_bits(BM::BILLBOARD_PARTICLES - 0) = BM::BILLBOARD_DISABLED;
+	uint32_t texture_filter : godot::Math::get_num_bits(BM::TEXTURE_FILTER_MAX - 1) = BM::TEXTURE_FILTER_LINEAR_WITH_MIPMAPS;
+	uint32_t detail_blend_mode : godot::Math::get_num_bits(BM::BLEND_MODE_PREMULT_ALPHA - 0) = BM::BLEND_MODE_MIX;
+	uint32_t detail_uv_layer : godot::Math::get_num_bits(BM::DETAIL_UV_2 - 0) = BM::DETAIL_UV_1;
+	uint32_t distance_fade : godot::Math::get_num_bits(BM::DISTANCE_FADE_OBJECT_DITHER - 0) = BM::DISTANCE_FADE_DISABLED;
 	uint32_t flags = 0;
 	uint32_t features = 0;
 	// Simulator samples non-MSDF LA8 font atlases as raw RG channels.

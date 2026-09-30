@@ -166,7 +166,10 @@ int32_t GDRKBridgeDelegate::get2DWindowPlacement(uint64_t id) const {
 	const godot::String key = "reality_kit/2d_window_placement";
 	const godot::StringName metadata_key = "gdrk_initial_placement";
 	godot::ProjectSettings *settings = godot::ProjectSettings::get_singleton();
-	godot::String placement = settings->get_setting(key, "Automatic").stringify();
+	if (!settings->has_setting(key)) {
+		settings->set_setting(key, "Automatic");
+	}
+	godot::String placement = settings->get_setting_with_override(key).stringify();
 
 	if (auto *display = godot::DisplayServer::get_singleton()) {
 		const uint64_t object_id = display->window_get_attached_instance_id(id);
@@ -221,6 +224,7 @@ bool GDRKBridgeDelegate::ExtensionSettings::should_convert_world_environment() c
 #else
 			switch (presentationStyle) {
 				case PresentationStyle::kVolumetricWindow:
+				case PresentationStyle::kFlatWindow:
 					return false; // Windows should receive AR lighting by default, from the OS.
 				case PresentationStyle::kVolumetricPortal:
 					return true; // Scenes in Portals should receive use the virtual IBL.
@@ -232,32 +236,35 @@ bool GDRKBridgeDelegate::ExtensionSettings::should_convert_world_environment() c
 	}
 }
 
+static godot::Variant get_plugin_setting_with_override(const godot::String &key, const godot::Variant &default_value) {
+	auto *settings = godot::ProjectSettings::get_singleton();
+	// The export pack can omit a base value that equals its editor default while
+	// retaining a feature override. Restore the base before resolving overrides.
+	if (!settings->has_setting(key)) {
+		settings->set_setting(key, default_value);
+	}
+	return settings->get_setting_with_override(key);
+}
+
 GDRKBridgeDelegate::ExtensionSettings GDRKBridgeDelegate::getExtensionSettings() const {
 	static bool fetched = false;
 	static GDRKBridgeDelegate::ExtensionSettings cached;
 	if (!fetched) {
 		fetched = true;
-		godot::ProjectSettings *project_settings = godot::ProjectSettings::get_singleton();
-
 		// Game controller events
 		{
-			bool value = true;
 			const auto key = "reality_kit/handles_game_controller_events";
-			if (project_settings->has_setting(key)) {
-				value = project_settings->get_setting(key).booleanize();
-			}
-			cached.handlesGameControllerEvents = value;
+			cached.handlesGameControllerEvents = get_plugin_setting_with_override(key, true).booleanize();
 		}
 
 		// Presentation style
 		{
-			godot::String value = "Volumetric Window";
 			godot::String key = "reality_kit/presentation_style";
-			if (project_settings->has_setting(key)) {
-				value = project_settings->get(key).stringify();
-			}
+			godot::String value = get_plugin_setting_with_override(key, "Volumetric Window").stringify();
 			if (value == "Volumetric Window") {
 				cached.presentationStyle = PresentationStyle::kVolumetricWindow;
+			} else if (value == "2D Window") {
+				cached.presentationStyle = PresentationStyle::kFlatWindow;
 			} else if (value == "Portal Window") {
 				cached.presentationStyle = PresentationStyle::kVolumetricPortal;
 			} else if (value == "Immersive") {
@@ -270,11 +277,8 @@ GDRKBridgeDelegate::ExtensionSettings GDRKBridgeDelegate::getExtensionSettings()
 
 		// Immersion style
 		{
-			godot::String value = "Mixed";
 			const auto key = "reality_kit/immersion_style";
-			if (project_settings->has_setting(key)) {
-				value = project_settings->get(key).stringify();
-			}
+			godot::String value = get_plugin_setting_with_override(key, "Mixed").stringify();
 			if (value == "Mixed") {
 				cached.immersionStyle = ImmersionStyle::kMixed;
 			} else if (value == "Full") {
@@ -289,11 +293,8 @@ GDRKBridgeDelegate::ExtensionSettings GDRKBridgeDelegate::getExtensionSettings()
 
 		// World Environment conversion
 		{
-			godot::String value = "Automatic";
 			const auto key = "reality_kit/world_environment";
-			if (project_settings->has_setting(key)) {
-				value = project_settings->get(key).stringify();
-			}
+			godot::String value = get_plugin_setting_with_override(key, "Automatic").stringify();
 			if (value == "Automatic") {
 				cached.world_environment = WorldEnvironmentConversion::kAutomatic;
 			} else if (value == "Enable") {
@@ -308,12 +309,8 @@ GDRKBridgeDelegate::ExtensionSettings GDRKBridgeDelegate::getExtensionSettings()
 
 		// Portal world scale
 		{
-			float value = 0.0f;
 			const auto key = "reality_kit/portal_presentation_world_scale";
-			if (project_settings->has_setting(key)) {
-				value = (float)project_settings->get_setting(key);
-			}
-			cached.portalWorldScale = value;
+			cached.portalWorldScale = (float)get_plugin_setting_with_override(key, 0.0f);
 		}
 	}
 	return cached;
@@ -398,6 +395,34 @@ UIViewController *GDRKBridgeDelegate::getDisplayServerViewController() const {
 	const uint64_t view_controller_u64 = display_server->window_get_native_handle(godot::DisplayServer::WINDOW_HANDLE);
 	UIViewController *view_controller = (__bridge UIViewController *)(void *)view_controller_u64;
 	return view_controller;
+}
+
+simd_float2 GDRKBridgeDelegate::getPrimary2DInitialSize() const {
+	const auto *settings = godot::ProjectSettings::get_singleton();
+	const int64_t viewport_width = settings->get_setting_with_override("display/window/size/viewport_width");
+	const int64_t viewport_height = settings->get_setting_with_override("display/window/size/viewport_height");
+	const int64_t width_override = settings->get_setting_with_override("display/window/size/window_width_override");
+	const int64_t height_override = settings->get_setting_with_override("display/window/size/window_height_override");
+	const auto *display_server = godot::DisplayServer::get_singleton();
+	const float scale = float(display_server->screen_get_scale());
+	const float points_per_pixel = scale > 0.0f ? 1.0f / scale : 1.0f;
+	return simd_make_float2(float(width_override > 0 ? width_override : viewport_width) * points_per_pixel,
+			float(height_override > 0 ? height_override : viewport_height) * points_per_pixel);
+}
+
+simd_float2 GDRKBridgeDelegate::getPrimary2DMinimumSize() const {
+	const auto *display_server = godot::DisplayServer::get_singleton();
+	const godot::Vector2i minimum = display_server->window_get_min_size();
+	const float scale = float(display_server->screen_get_scale());
+	const float points_per_pixel = scale > 0.0f ? 1.0f / scale : 1.0f;
+	return simd_make_float2(float(minimum.x) * points_per_pixel, float(minimum.y) * points_per_pixel);
+}
+
+void GDRKBridgeDelegate::syncPrimary2DWindowGeometry() const {
+	auto *display_server = godot::DisplayServer::get_singleton();
+	if (display_server) {
+		display_server->window_set_size(display_server->window_get_size());
+	}
 }
 
 UIImage *GDRKBridgeDelegate::getBootSplashImage() const {

@@ -43,6 +43,11 @@ godot::Node3D *CameraLoader::get_current_node() const {
 
 	godot::Viewport *viewport = Base::owner->window_scene_root
 			? Base::owner->window_scene_root->get_viewport() : reality_scene_tree->get_root()->get_viewport();
+	// An additional volume's scene exists before its viewport enters the tree.
+	// A nested frame callback during that interval must not dereference it.
+	if (!viewport) {
+		return nullptr;
+	}
 	if (godot::Camera3D *camera_3d = viewport->get_camera_3d()) {
 #if TARGET_OS_XR
 		if (RealityVolumeCamera3D *volume_camera = godot::Object::cast_to<RealityVolumeCamera3D>(camera_3d->get_parent())) {

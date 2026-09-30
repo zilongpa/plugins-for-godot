@@ -21,7 +21,14 @@ GODOT_CPP_BRANCH=<godot-cpp commit or branch>
 SHARED_WORKSPACE=../../shared_workspace
 ```
 
-Running `scons` with no arguments builds everything: builds dependencies (if not already present), builds the macOS editor framework and visionOS template framework, assembles the addon, and generates documentation.
+Running `scons` with no arguments builds everything: dependencies (if needed),
+the macOS editor, visionOS device and visionOS Simulator frameworks,
+documentation, and an addon containing both visionOS slices.
+
+`SHARED_WORKSPACE` reuses prebuilt dependencies and does not check out the
+commits in `deps.conf`. Before validating or packaging a build from a shared
+workspace, compare both dependency HEADs to the configured commits. A
+framework that compiles against other commits is not an exact-pin build.
 
 ```sh
 scons
@@ -41,7 +48,8 @@ scons config=release
 |---|---|
 | `scons deps` | Clone and build Godot + godot-cpp only |
 | `scons framework platform=macos` | Build macOS framework only |
-| `scons framework platform=visionos` | Build visionOS framework only |
+| `scons framework platform=visionos` | Build visionOS device framework only |
+| `scons framework platform=visionos simulator=yes` | Build visionOS Simulator framework only |
 | `scons addon` | Assemble addon for distribution |
 | `scons docs` | Regenerate `doc_data.gen.cpp` from `doc_classes/*.xml` and rebuild the frameworks to embed the updated docs |
 
@@ -60,12 +68,12 @@ addons/GodotRealityKit/
         godot_macos.zip
     macos.template_debug -> macos.editor
     visionos.template_debug/     # or visionos.template_release with config=release
-        GodotRealityKit.framework
+        GodotRealityKit.xcframework/  # device and Simulator slices
         godot_visionos.zip
 ```
 
 ## Experimental visionOS Simulator builds
 
-See [Simulator](Simulator.md) for the opt-in Debug arm64 workflow, the pinned
-Godot engine patch, and tested limitations. The default addon remains a device
-build; selecting a simulator in Xcode alone is not sufficient.
+See [Simulator](Simulator.md) for Debug arm64 validation and tested limitations.
+The default addon includes both device and Simulator framework slices; use its
+matching Godot editor and export template when exporting an Xcode project.

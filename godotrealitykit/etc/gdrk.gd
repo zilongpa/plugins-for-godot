@@ -47,7 +47,7 @@ func setup_realitykit_presentation_style():
 		"name": key,
 		"type": TYPE_STRING,
 		"hint": PROPERTY_HINT_ENUM,
-		"hint_string": "Volumetric Window,Portal Window,Immersive"
+		"hint_string": "Volumetric Window,2D Window,Portal Window,Immersive"
 	})
 
 func setup_2d_window_placement():
