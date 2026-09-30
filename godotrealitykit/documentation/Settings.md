@@ -52,11 +52,11 @@ when they are positive, or the viewport size otherwise. Feature-specific project
 settings such as `.visionos` are respected. The root [Window](https://docs.godotengine.org/en/stable/classes/class_window.html)
 continues to control minimum and maximum size and whether resizing is allowed.
 
-The primary 2D host uses the plain visionOS window style. If a layout reserves
-unused space inside the Godot viewport to influence initial volume placement,
-enable `display/window/per_pixel_transparency/allowed`, set the root
-`Window.transparent` property, and set its `transparent_bg` property. Otherwise
-the unused area renders as an opaque viewport background.
+The primary 2D host uses the system's glass window background. To show it
+behind Godot controls, enable `display/window/per_pixel_transparency/allowed`,
+set the root `Window.transparent` property, and set its `transparent_bg`
+property. Size and place controls within the Godot viewport; blank transparent
+space still belongs to the native window and offsets its resize handle.
 
 For example:
 

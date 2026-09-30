@@ -1551,7 +1551,7 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
             Primary2DWindow()
         }
         .defaultSize(width: size.width, height: size.height)
-        .windowStyle(.plain)
+        .windowStyle(.automatic)
         .windowResizability(.contentMinSize)
         .restorationBehavior(.disabled)
     }
