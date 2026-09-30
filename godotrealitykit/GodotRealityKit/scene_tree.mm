@@ -904,6 +904,15 @@ bool RealitySceneTree::_process(double p_time) {
 	}
 #endif
 
+#if TARGET_OS_XR
+	// In the 2D-first presentation the original Godot view drives this loop.
+	// There is no GodotViewController display link to synchronize the shared
+	// accessory tracker, so publish controller input before processing the frame.
+	if (extension_settings.presentationStyle == kFlatWindow && controller_interface.is_valid()) {
+		GodotRealityKit::Bridge::synchronizeAccessoryTracking();
+	}
+#endif
+
 	const bool res = godot::SceneTree::_process(p_time);
 
 	return res;

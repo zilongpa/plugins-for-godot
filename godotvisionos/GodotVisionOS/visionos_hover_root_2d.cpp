@@ -203,7 +203,8 @@ bool VisionOSHoverRoot2D::make_target(Control *p_control, Viewport *p_viewport, 
 	const TypedArray<Window> subwindows = p_viewport->get_embedded_subwindows();
 	for (int i = 0; i < subwindows.size(); i++) {
 		Window *subwindow = Object::cast_to<Window>(static_cast<Object *>(subwindows[i]));
-		if (subwindow && subwindow->is_visible() && (Object::cast_to<PopupMenu>(subwindow) || Rect2(subwindow->get_position(), subwindow->get_size()).intersects(local_visible))) {
+		if (subwindow && subwindow->is_visible() &&
+				viewport_transform.xform(Rect2(subwindow->get_position(), subwindow->get_size())).intersects(local_visible)) {
 			return false;
 		}
 	}
@@ -276,7 +277,9 @@ void VisionOSHoverRoot2D::scan_popup(PopupMenu *p_popup, Viewport *p_host, int64
 	if (!p_popup->has_method("get_item_rect") || p_popup->is_native_menu()) {
 		return;
 	}
-	const Transform2D transform = p_popup->get_final_transform();
+	Transform2D transform = p_host->get_final_transform();
+	transform.translate_local(p_offset);
+	transform *= p_popup->get_final_transform();
 	if (!is_axis_aligned(transform)) {
 		return;
 	}
@@ -286,8 +289,8 @@ void VisionOSHoverRoot2D::scan_popup(PopupMenu *p_popup, Viewport *p_host, int64
 		if (p_popup->is_item_disabled(i) || p_popup->is_item_separator(i)) {
 			continue;
 		}
-		const Rect2 full = offset_rect(transform.xform(Rect2(p_popup->call("get_item_rect", i, false))), p_offset);
-		const Rect2 visible = offset_rect(transform.xform(Rect2(p_popup->call("get_item_rect", i, true))), p_offset).intersection(p_host_clip);
+		const Rect2 full = transform.xform(Rect2(p_popup->call("get_item_rect", i, false)));
+		const Rect2 visible = transform.xform(Rect2(p_popup->call("get_item_rect", i, true))).intersection(p_host_clip);
 		if (!visible.has_area()) {
 			continue;
 		}
@@ -297,7 +300,8 @@ void VisionOSHoverRoot2D::scan_popup(PopupMenu *p_popup, Viewport *p_host, int64
 			Window *other = Object::cast_to<Window>(static_cast<Object *>(windows[j]));
 			if (other == p_popup) {
 				above_popup = true;
-			} else if (above_popup && other && other->is_visible() && Rect2(other->get_position(), other->get_size()).intersects(visible)) {
+			} else if (above_popup && other && other->is_visible() &&
+					p_host->get_final_transform().xform(Rect2(other->get_position(), other->get_size())).intersects(visible)) {
 				occluded = true;
 				break;
 			}

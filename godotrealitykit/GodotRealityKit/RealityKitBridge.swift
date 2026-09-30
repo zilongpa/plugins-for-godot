@@ -1822,6 +1822,9 @@ public class Bridge {
         }
     }
     public static func isAccessoryTrackingSupported() -> Bool { AccessoryTrackingProvider.isSupported }
+    public static func synchronizeAccessoryTracking() {
+        MainActor.assumeIsolated { SharedAccessoryTracking.shared.synchronize() }
+    }
     public static func stopAccessoryTracking() { MainActor.assumeIsolated { SharedAccessoryTracking.shared.stop() } }
     public static func registerVolumeWindow(_ root: Entity, _ delegate: GDRKBridgeDelegate, _ id: UInt64, _ generation: UInt64) {
         assumeMainActor(root, delegate, id, generation) { root, delegate, id, generation in
