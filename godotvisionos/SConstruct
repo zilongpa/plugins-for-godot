@@ -57,7 +57,7 @@ def ensure_dependencies():
     if not os.path.isfile(api):
         editor = os.path.join(godot_dir, 'bin', 'godot.macos.editor.dev.arm64')
         if not os.path.isfile(editor):
-            subprocess.check_call(['scons', 'platform=macos', 'target=editor', 'dev_build=yes', '-j8'], cwd=godot_dir)
+            subprocess.check_call(['scons', 'platform=macos', 'target=editor', 'dev_build=yes', 'vulkan=no', '-j8'], cwd=godot_dir)
         subprocess.check_call([editor, '--dump-extension-api'], cwd=deps_dir)
     args = ['scons', 'platform=macos' if platform == 'macos' else 'platform=visionos',
             'target=' + ('editor' if platform == 'macos' and config == 'debug' else 'template_' + config),
