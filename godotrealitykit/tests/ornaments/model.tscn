@@ -1,0 +1,19 @@
+[gd_scene load_steps=5 format=3]
+[sub_resource type="StandardMaterial3D" id="Material"]
+albedo_color = Color(0.05, 0.75, 0.65, 1)
+metallic = 0.15
+roughness = 0.5
+[sub_resource type="TorusMesh" id="Mesh"]
+inner_radius = 0.12
+outer_radius = 0.24
+material = SubResource("Material")
+[sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMaterial")
+[node name="Model" type="Node3D"]
+[node name="Torus" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh")
+[node name="Light" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-45, -30, 0)
+[node name="Camera" type="RealityVolumeCamera3D" parent="."]
+size = Vector3(1, 1, 1)

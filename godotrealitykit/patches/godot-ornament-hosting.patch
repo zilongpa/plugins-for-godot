@@ -1,0 +1,86 @@
+--- a/drivers/apple_embedded/display_server_apple_embedded.mm
++++ b/drivers/apple_embedded/display_server_apple_embedded.mm
+@@ -769,6 +769,7 @@
+ #ifdef VISIONOS_ENABLED
+ 	SubWindowData *data = sub_windows.getptr(p_window);
+ 	if (!data || data->controller != p_controller) { return; }
++	const bool embedded = ((__bridge GDTViewController *)p_controller).godotEmbeddedWindow;
+ 	focus_visionos_window(p_window, false);
+ 	data = sub_windows.getptr(p_window);
+ 	if (!data || data->controller != p_controller) { return; }
+@@ -779,6 +780,8 @@
+ #endif
+ 	data->controller = nullptr;
+ 	data->scene = nullptr;
++	// The owner volume may reopen. Keep the logical Window and its UI state alive.
++	if (embedded) { return; }
+ 	if (sub_windows.has(p_window)) { _window_callback(callback, int(DisplayServerEnums::WINDOW_EVENT_CLOSE_REQUEST)); }
+ 	if (sub_windows.has(p_window)) { _window_callback(callback, int(DisplayServerEnums::WINDOW_EVENT_FORCE_CLOSE)); }
+ #endif
+@@ -870,6 +873,7 @@
+ 	} else if (SubWindowData *data = sub_windows.getptr(p_window)) {
+ 		data->title = p_title;
+ 		controller = (__bridge UIViewController *)data->controller;
++		if (((GDTViewController *)controller).godotEmbeddedWindow) { return; }
+ 	}
+ 	controller.viewIfLoaded.window.windowScene.title = [NSString stringWithUTF8String:p_title.utf8().get_data()];
+ #endif
+@@ -957,6 +961,16 @@
+ 		controller = (__bridge UIViewController *)data->controller;
+ 		min_size = data->min_size;
+ 		max_size = data->max_size;
++	}
++	if (p_window != DisplayServerEnums::MAIN_WINDOW_ID && ((GDTViewController *)controller).godotEmbeddedWindow) {
++		Size2i bounded_size = p_size.max(min_size);
++		if (max_size.x > 0) { bounded_size.x = MIN(bounded_size.x, max_size.x); }
++		if (max_size.y > 0) { bounded_size.y = MIN(bounded_size.y, max_size.y); }
++		const CGFloat scale = screen_get_scale();
++		// SwiftUI owns the embedded view's frame; never resize its parent volume.
++		[[NSNotificationCenter defaultCenter] postNotificationName:@"org.godotengine.visionos.embeddedWindowSize"
++				object:@(p_window) userInfo:@{@"width": @(bounded_size.x / scale), @"height": @(bounded_size.y / scale)}];
++		return;
+ 	}
+ 	UIWindowScene *scene = controller.viewIfLoaded.window.windowScene;
+ 	if (scene) {
+--- a/drivers/apple_embedded/godot_view_controller.h
++++ b/drivers/apple_embedded/godot_view_controller.h
+@@ -38,9 +38,12 @@
+ @interface GDTViewController : UIViewController
+ 
+ @property(nonatomic, assign) NSInteger godotWindowID;
++// A renderer integration can host this view inside another scene (for example an ornament).
++@property(nonatomic, assign) BOOL godotEmbeddedWindow;
+ @property(nonatomic, readonly, strong) GDTView *godotView;
+ @property(nonatomic, readonly, strong) GDTKeyboardInputView *keyboardView;
+ 
+ - (void)godotAttachWindowIfReady;
++- (void)godotDetachEmbeddedWindow;
+ 
+ @end
+--- a/drivers/apple_embedded/godot_view_controller.mm
++++ b/drivers/apple_embedded/godot_view_controller.mm
+@@ -202,6 +202,16 @@
+ #endif
+ }
+ 
++- (void)godotDetachEmbeddedWindow {
++#if defined(VISIONOS_ENABLED)
++	if (self.godotEmbeddedWindow && self.godotWindowID != DisplayServerEnums::MAIN_WINDOW_ID) {
++		if (auto *display = DisplayServerAppleEmbedded::get_singleton()) {
++			display->disconnect_visionos_window(self.godotWindowID, (__bridge void *)self);
++		}
++	}
++#endif
++}
++
+ - (void)viewDidDisappear:(BOOL)animated {
+ 	#if defined(VISIONOS_ENABLED)
+ 	[[NSNotificationCenter defaultCenter] removeObserver:self name:UIWindowDidBecomeKeyNotification object:self.view.window];
+@@ -210,6 +220,7 @@
+ 		DisplayServerAppleEmbedded::get_singleton()->focus_visionos_window(self.godotWindowID, false);
+ 	}
+ 	if (self.godotWindowID != DisplayServerEnums::MAIN_WINDOW_ID) {
++		[self godotDetachEmbeddedWindow];
+ 		// A view can disappear while its visionOS scene remains open, for example
+ 		// during system UI presentation or SwiftUI controller replacement. The
+ 		// DisplayServer disconnects this window on UISceneDidDisconnect instead.

@@ -1154,6 +1154,7 @@ private struct Godot2DSessionKey: Codable, Hashable {
             guard let id = notification.object as? UInt64 else { return }
             (notification.userInfo?["routing"] as? NSMutableDictionary)?["claimed"] = true
             MainActor.assumeIsolated {
+                if GodotOrnaments.shared.openIfRequested(id) { return }
                 guard opened.insert(id).inserted else { return }
                 let generation = (generations[id] ?? 0) + 1
                 generations[id] = generation
@@ -1176,6 +1177,7 @@ private struct Godot2DSessionKey: Codable, Hashable {
         observers.append(NotificationCenter.default.addObserver(forName: Notification.Name("org.godotengine.visionos.closeWindow"), object: nil, queue: .main) { notification in
             guard let id = notification.object as? UInt64 else { return }
             MainActor.assumeIsolated {
+                GodotOrnaments.shared.remove(id)
                 opened.remove(id)
                 pending.removeValue(forKey: id)
                 presentedGenerations.removeValue(forKey: id)
@@ -1187,6 +1189,7 @@ private struct Godot2DSessionKey: Codable, Hashable {
                 Bridge.delegate?.set2DWindowNativeOpen(id, false)
             }
         })
+        GodotOrnaments.shared.install()
     }
 }
 
@@ -1517,8 +1520,11 @@ private struct VolumeWindowContent: View {
             }
             .background { VolumeHostObserver(record: record).frame(width: 0, height: 0).allowsHitTesting(false) }
             .ornament(attachmentAnchor: .scene(.bottom)) {
-                if !record.title.isEmpty { Text(record.title).padding(12).glassBackgroundEffect() }
+                if !record.title.isEmpty && GodotOrnaments.shared.record(for: record.id) == nil {
+                    Text(record.title).padding(12).glassBackgroundEffect()
+                }
             }
+            .modifier(GodotOrnamentModifier(volumeID: record.id))
             .modifier(GodotSceneVisibilityBridge())
             .onAppear {
                 if record.id == 0 { Godot2DWindowRequests.registerVolumeOpener(openWindow, token: record.openerToken) }

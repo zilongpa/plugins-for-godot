@@ -1,0 +1,29 @@
+config_version=5
+
+[application]
+config/name="Godot Ornament Lab"
+run/main_scene="res://main.tscn"
+run/main_loop_type="RealitySceneTree"
+config/features=PackedStringArray("4.7", "Mobile")
+
+[display]
+window/size/viewport_width=640
+window/size/viewport_height=400
+window/subwindows/embed_subwindows=false
+
+[input_devices]
+pointing/emulate_mouse_from_touch=true
+
+[rendering]
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+rendering_device/driver.macos="metal"
+rendering_device/driver.visionos="metal"
+textures/default_filters/use_nearest_mipmap_filter=false
+textures/vram_compression/import_etc2_astc=true
+
+[reality_kit]
+presentation_style="2D Window"
+
+[editor_plugins]
+enabled=PackedStringArray("res://addons/GodotRealityKit/plugin.cfg")

@@ -10,7 +10,7 @@ DYLIB_INSTALL_NAME_BASE = @rpath
 ENABLE_MODULE_VERIFIER = YES
 
 
-HEADER_SEARCH_PATHS = $(SRCROOT)/../deps/godot-cpp/include $(SRCROOT)/../deps/godot-cpp/gen/include $(SRCROOT)/../deps/godot-cpp/gdextension $(PROJECT_DIR) $(BUILT_PRODUCTS_DIR)/GodotRealityKit.framework/Headers
+HEADER_SEARCH_PATHS = "$(SRCROOT)/../deps/godot-cpp/include" "$(SRCROOT)/../deps/godot-cpp/gen/include" "$(SRCROOT)/../deps/godot-cpp/gdextension" "$(PROJECT_DIR)" "$(BUILT_PRODUCTS_DIR)/GodotRealityKit.framework/Headers"
 
 INSTALL_PATH = $(LOCAL_LIBRARY_DIR)/Frameworks
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/Frameworks
