@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A64F47002FE1000100000001 /* GodotOrnaments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64F47002FE1000100000002 /* GodotOrnaments.swift */; };
 		668BF7332F3D700500190172 /* constants.h in Headers */ = {isa = PBXBuildFile; fileRef = 668BF7322F3D700200190172 /* constants.h */; };
 		66AA94CD2E90594B00D9610D /* HelpCommands.txt in Headers */ = {isa = PBXBuildFile; fileRef = 66AA94CC2E90594400D9610D /* HelpCommands.txt */; };
 		B87AC4B32E9E622600C2D9C5 /* bridge.h in Headers */ = {isa = PBXBuildFile; fileRef = B87AC4B22E9E622600C2D9C5 /* bridge.h */; };
@@ -25,6 +26,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A64F47002FE1000100000002 /* GodotOrnaments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GodotOrnaments.swift; sourceTree = "<group>"; };
 		668BF7322F3D700200190172 /* constants.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = constants.h; sourceTree = "<group>"; };
 		66AA94CC2E90594400D9610D /* HelpCommands.txt */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HelpCommands.txt; sourceTree = "<group>"; };
 		B87AC4B22E9E622600C2D9C5 /* bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bridge.h; sourceTree = "<group>"; };
@@ -147,6 +149,7 @@
 				EE0B780D2E7497D40041559B /* scene_tree.mm */,
 				EE5AD31F2E7104DB001C1DBB /* scene_tree.h */,
 				EEC9EA882DDAE9B6002934A2 /* RealityKitBridge.swift */,
+				A64F47002FE1000100000002 /* GodotOrnaments.swift */,
 				EE5ABED82E45D889003CD7D3 /* RealityKitUtils.swift */,
 				EEC9EA8A2DDAEB2F002934A2 /* Frameworks */,
 				EEC9EA7C2DDAE928002934A2 /* Products */,
@@ -319,6 +322,7 @@
 				EE5ABED92E45D889003CD7D3 /* RealityKitUtils.swift in Sources */,
 				EE0B780E2E7497D80041559B /* scene_tree.mm in Sources */,
 				EEC9EA892DDAE9B6002934A2 /* RealityKitBridge.swift in Sources */,
+				A64F47002FE1000100000001 /* GodotOrnaments.swift in Sources */,
 				B893BA212E8F73C70015F365 /* utility.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

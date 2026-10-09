@@ -189,6 +189,27 @@ int32_t GDRKBridgeDelegate::get2DWindowPlacement(uint64_t id) const {
 	WARN_PRINT(godot::String("Unsupported 2D window placement: ") + placement);
 	return 0;
 }
+static godot::Window *ornament_window(uint64_t id) {
+	auto *display = godot::DisplayServer::get_singleton();
+	return display ? godot::Object::cast_to<godot::Window>(godot::ObjectDB::get_instance(display->window_get_attached_instance_id(id))) : nullptr;
+}
+
+int64_t GDRKBridgeDelegate::get2DWindowOrnamentVolume(uint64_t id) const {
+	auto *window = ornament_window(id);
+	if (!window || !window->has_meta("gdrk_ornament_volume_id")) { return -1; }
+	const godot::Variant value = window->get_meta("gdrk_ornament_volume_id");
+	if (value.get_type() != godot::Variant::INT || int64_t(value) < 0) { return -2; }
+	return int64_t(value);
+}
+
+simd_float2 GDRKBridgeDelegate::get2DWindowSizePoints(uint64_t id) const {
+	auto *display = godot::DisplayServer::get_singleton();
+	if (!display) { return simd_make_float2(480, 260); }
+	const godot::Vector2i size = display->window_get_size(id);
+	const float scale = godot::MAX(1.0f, display->screen_get_scale());
+	return simd_make_float2(godot::MAX(1, size.x) / scale, godot::MAX(1, size.y) / scale);
+}
+
 void GDRKBridgeDelegate::cancelSpatialPress(int64_t id) const {
 	if (auto *loader = get_loader()) {
 		loader->cancel_press(id);

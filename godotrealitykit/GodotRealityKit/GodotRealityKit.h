@@ -133,6 +133,9 @@ public:
 	// Initial placement for a native Godot Window on visionOS. A Window metadata
 	// override takes precedence over the project's default placement setting.
 	int32_t get2DWindowPlacement(uint64_t p_id) const;
+	// -1: ordinary window; -2: invalid ornament configuration.
+	int64_t get2DWindowOrnamentVolume(uint64_t p_id) const;
+	simd_float2 get2DWindowSizePoints(uint64_t p_id) const;
 
 	void printError(const char *p_msg);
 	void printWarning(const char *p_msg);

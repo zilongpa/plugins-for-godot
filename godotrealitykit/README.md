@@ -41,5 +41,6 @@ during development.
 - [Adding the Plugin to your Game](./documentation/AddingPlugin.md)
 - [Rendering](./documentation/Rendering.md)
 - [Nodes from the plugin](./documentation/Nodes.md)
+- [Godot controls in volume ornaments](./documentation/Ornaments.md)
 - [Settings](./documentation/Settings.md)
 - [Troubleshooting](./documentation/Troubleshooting.md)

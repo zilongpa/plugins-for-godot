@@ -32,6 +32,7 @@ import subprocess
 import shutil
 import tempfile
 import zipfile
+import shlex
 
 from SCons.Variables import BoolVariable
 
@@ -184,6 +185,8 @@ def build_godot(target_env):
         Exit(1)
 
     prepare_checkout(GODOT_URL, GODOT_BRANCH, gdir)
+    subprocess.check_call([sys.executable,
+        os.path.join(REPO_DIR, 'scripts', 'build', 'apply-engine-patches.py'), gdir])
 
     scons_cmds = [
         ['verbose=1', 'platform=macos', 'target=editor', 'generate_bundle=yes',
@@ -196,7 +199,7 @@ def build_godot(target_env):
             'verbose=1', 'platform=visionos', 'target=template_' + config_arg,
             'simulator=' + simulator, 'arch=arm64', 'generate_bundle=yes',
             'compiledb=yes', 'vulkan=false',
-            'SWIFT_FRONTEND=' + os.path.join(REPO_DIR, 'scripts', 'build', 'swift-frontend-wrapper.sh'),
+            'SWIFT_FRONTEND=' + shlex.quote(os.path.join(REPO_DIR, 'scripts', 'build', 'swift-frontend-wrapper.sh')),
         ])
 
     # Godot generates shared headers, so finish each platform before starting
@@ -401,8 +404,10 @@ def assemble_full_addon(cfg):
         ad = os.path.join(stage, 'GodotRealityKit')
         os.makedirs(ad)
         etc_dir = os.path.join(REPO_DIR, 'etc')
-        for name in ('plugin.cfg', 'GodotRealityKit.gdextension', 'gdrk.gd', 'gdrk_export.gd'):
+        for name in ('plugin.cfg', 'GodotRealityKit.gdextension', 'gdrk.gd', 'gdrk_export.gd', 'reality_ornament.gd'):
             shutil.copy2(os.path.join(etc_dir, name), ad)
+        shutil.copy2(os.path.join(REPO_DIR, 'documentation', 'Ornaments.md'), ad)
+        shutil.copy2(os.path.join(REPO_DIR, '..', 'LICENSE'), ad)
         for name in ('volume_camera_gizmo', 'directional_light_shadow_gizmo', 'clipping_gizmo'):
             shutil.copytree(os.path.join(etc_dir, name), os.path.join(ad, name))
 

@@ -61,6 +61,8 @@ addons/GodotRealityKit/
     plugin.cfg
     gdrk.gd
     gdrk_export.gd
+    reality_ornament.gd
+    Ornaments.md
     volume_camera_gizmo/
     directional_light_shadow_gizmo/
     macos.editor/                # or macos.template_release with config=release
@@ -71,6 +73,10 @@ addons/GodotRealityKit/
         GodotRealityKit.xcframework/  # device and Simulator slices
         godot_visionos.zip
 ```
+
+The dependency build applies the required embedded-window engine patch for
+[volume ornaments](Ornaments.md). Shared prebuilt workspaces must already
+contain the patched engine and rebuilt templates.
 
 ## Experimental visionOS Simulator builds
 
