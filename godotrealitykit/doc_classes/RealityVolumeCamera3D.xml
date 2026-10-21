@@ -37,6 +37,12 @@
 				Returns the camera frustum planes in world space.
 			</description>
 		</method>
+		<method name="get_window_measured_size" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				Returns the physical size, in meters, that visionOS reports for the volume this camera's [Window] opens as. Returns [code]Vector3(0, 0, 0)[/code] until the volume is shown, and again after it closes; use [member window_size] until then.
+			</description>
+		</method>
 		<method name="is_position_behind" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="world_point" type="Vector3" />
@@ -101,11 +107,28 @@
 		<member name="preview_camera_enabled" type="bool" setter="set_preview_camera_enabled" getter="get_preview_camera_enabled" default="true">
 			If [code]true[/code], a preview [Camera3D] is generated so the editor viewport can preview the volume camera's view.
 		</member>
+		<member name="window_max_size" type="Vector3" setter="set_window_max_size" getter="get_window_max_size" default="Vector3(0, 0, 0)">
+			The largest physical size, in meters, the person can resize the volume to when its [Window] opens as a volume. Zero components leave that dimension unbounded.
+		</member>
+		<member name="window_min_size" type="Vector3" setter="set_window_min_size" getter="get_window_min_size" default="Vector3(0, 0, 0)">
+			The smallest physical size, in meters, the person can resize the volume to when its [Window] opens as a volume. Zero components leave that dimension unbounded.
+		</member>
+		<member name="window_size" type="Vector3" setter="set_window_size" getter="get_window_size" default="Vector3(1, 1, 1)">
+			The physical size of the volume, in meters, when its [Window] opens as a volume. In the [b]2D Window[/b] presentation style, a [Window] holding this camera opens as a RealityKit volume; set [member Window.unresizable] to keep this size.
+		</member>
 		<member name="size" type="float" setter="set_size" getter="get_size" default="5.0">
 			Size of the volume relative to the Node itself. There is a gizmo displaying the cube
 			in the editor, so that you can preview what is inside and outside the volume.
 		</member>
 	</members>
+	<signals>
+		<signal name="window_resized">
+			<param index="0" name="size" type="Vector3" />
+			<description>
+				Emitted when the physical size of the volume changes, with the new size in meters: when it opens, when the person resizes it, and with [code]Vector3(0, 0, 0)[/code] when it closes (see [method get_window_measured_size]).
+			</description>
+		</signal>
+	</signals>
 	<constants>
 		<constant name="KEEP_WIDTH" value="0" enum="KeepAspect">
 			Preserve the volume's width when adapting to a different aspect ratio.

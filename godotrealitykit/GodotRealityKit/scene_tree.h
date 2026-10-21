@@ -18,15 +18,12 @@
 // clang-format on
 
 #undef check
-#include "volume_window_options.h"
-
 #include <godot_cpp/classes/input_event_from_window.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
-#include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/classes/xr_interface.hpp>
+
 #include <godot_cpp/templates/local_vector.hpp>
 
-#include <map>
 #include <tuple>
 
 class GDRKBridgeDelegate;
@@ -71,18 +68,12 @@ struct ColliderInputEventParams {
 class SceneLoader {
 public:
 	~SceneLoader();
-	std::shared_ptr<GDRKBridgeLifetime> lifetime = std::make_shared<GDRKBridgeLifetime>();
-	uint64_t volume_id = 0;
-	bool input_enabled = true;
-	void stop_input();
-	void cancel_press(int64_t p_id);
-	bool ready_to_release();
 
 	void initialize(godot::Node *p_node, GodotRealityKit::Entity p_entity);
 
 	void update();
 
-	godot::Node *get_root_node() { return godot::Object::cast_to<godot::Node>(godot::ObjectDB::get_instance(root_node_id)); }
+	godot::Node *get_root_node() { return root_node; }
 
 	NodeLoaders *get_nodes() { return nodes; }
 	ResourceLoaderSet &get_resource_loaders() { return resource_loaders; }
@@ -112,7 +103,7 @@ private:
 	uint32_t current_command_buffer_idx = 0;
 	godot::TightLocalVector<id<MTLCommandBuffer>> command_buffers;
 
-	uint64_t root_node_id = 0;
+	godot::Node *root_node = nullptr;
 	GodotRealityKit::Entity root_entity = GodotRealityKit::Entity::initAndMaterialize();
 
 	ResourceLoaderSet resource_loaders = {};
@@ -123,11 +114,10 @@ private:
 	godot::LocalVector<ColliderInputEventParams> input_event_queue;
 
 	static constexpr uint32_t max_active_presses = 2;
-	mutable std::array<int64_t, max_active_presses> active_presses = { -1, -1 };
+	mutable std::array<int64_t, max_active_presses> active_presses;
 	mutable std::array<simd_float3, max_active_presses> last_active_press_position;
 	mutable std::array<simd_float2, max_active_presses> last_active_press_location;
 	mutable uint32_t next_active_press_idx = 0;
-	std::array<ColliderInputEventParams, max_active_presses> active_press_targets = {};
 
 	std::optional<std::function<void()>> on_next_frame_completion;
 	bool loading_in_progress = false;
@@ -140,7 +130,7 @@ class RealitySceneTree : public godot::SceneTree {
 	GDCLASS(RealitySceneTree, SceneTree);
 
 protected:
-	static void _bind_methods();
+	static void _bind_methods() {}
 
 public:
 	~RealitySceneTree() override;
@@ -151,57 +141,20 @@ public:
 	bool _physics_process(double p_time) override;
 
 	SceneLoader *get_loader() { return loader; }
-	SceneLoader *get_loader_for_node(godot::Node *p_node);
-	void update_loaders();
-	enum VolumeWindowState { INVALID = -1,
-		CLOSED,
-		OPENING,
-		OPEN,
-		CLOSING,
-		DESTROYING };
-	int64_t open_volume_window(const godot::String &p_scene_path, const godot::String &p_title, const godot::Ref<RealityVolumeWindowOptions> &p_options = {});
-	godot::Error reopen_volume_window(int64_t p_id);
-	godot::Error close_volume_window(int64_t p_id);
-	godot::Error destroy_volume_window(int64_t p_id);
-	godot::PackedInt64Array get_volume_window_ids() const;
-	bool has_volume_window(int64_t p_id) const;
-	VolumeWindowState get_volume_window_state(int64_t p_id) const;
-	godot::Node *get_volume_window_root(int64_t p_id) const;
-	godot::Viewport *get_volume_window_viewport(int64_t p_id) const;
-	int64_t get_volume_window_id(godot::Node *p_node) const;
-	godot::String get_volume_window_title(int64_t p_id) const;
-	godot::Error set_volume_window_title(int64_t p_id, const godot::String &p_title);
-	godot::Ref<RealityVolumeWindowOptions> get_volume_window_options(int64_t p_id) const;
-	godot::Error set_volume_window_options(int64_t p_id, const godot::Ref<RealityVolumeWindowOptions> &p_options);
-	godot::Vector3 get_volume_window_size(int64_t p_id) const;
-	void native_window_event(uint64_t p_id, uint64_t p_generation, int p_event, const godot::String &p_error);
-	void native_window_size(uint64_t p_id, uint64_t p_generation, const godot::Vector3 &p_size);
+	// The loader of the volume, portal or main scene that p_node belongs to.
+	SceneLoader *loader_for(godot::Node *p_node);
 
 	const GDRKBridgeDelegate::ExtensionSettings &get_extension_settings() const { return extension_settings; }
 
 private:
+	void on_node_added(godot::Node *p_node);
+	void on_node_removed(godot::Node *p_node);
 	void clear_boot_image();
 
 	void dump_reality_file_and_quit();
 
 	GodotRealityKit::Bridge bridge = GodotRealityKit::Bridge::init();
 	SceneLoader *loader = nullptr;
-	struct VolumeWindow {
-		SceneLoader *loader = nullptr;
-		uint64_t root_id = 0, viewport_id = 0, generation = 0;
-		VolumeWindowState state = CLOSED;
-		bool desired_open = false, native_closed = true;
-		godot::String title;
-		godot::Ref<RealityVolumeWindowOptions> options;
-		godot::Vector3 size;
-	};
-	std::map<int64_t, VolumeWindow> volumes;
-	int64_t next_volume_id = 1;
-	void set_window_state(int64_t p_id, VolumeWindowState p_state);
-	void apply_window_options(int64_t p_id);
-	void retire_windows();
-	void volume_root_exiting(int64_t p_id);
-
 	GDRKBridgeDelegate::ExtensionSettings extension_settings;
 #if TARGET_OS_XR
 	// The accessory-backed controller interface, when this scene tree registered one.
@@ -212,7 +165,5 @@ private:
 };
 
 } // namespace gdrk
-
-VARIANT_ENUM_CAST(gdrk::RealitySceneTree::VolumeWindowState);
 
 #endif // SCENE_TREE_H

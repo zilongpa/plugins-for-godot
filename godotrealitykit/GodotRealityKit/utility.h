@@ -22,7 +22,6 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/defs.hpp>
-#include <godot_cpp/core/math_funcs_binary.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/local_vector.hpp>
 
@@ -376,7 +375,7 @@ public:
 		}
 
 		const uint32_t old_capacity = _capacity;
-		_capacity = godot::Math::nearest_power_of_2_templated(p_size);
+		_capacity = godot::nearest_power_of_2_templated(p_size);
 		if (old_capacity <= N) [[unlikely]] {
 			T *heap_data = (T *)memalloc(_capacity * sizeof(T));
 			CRASH_COND_MSG(!heap_data, "Out of memory");

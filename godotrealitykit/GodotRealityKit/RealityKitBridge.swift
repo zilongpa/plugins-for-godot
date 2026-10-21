@@ -25,7 +25,6 @@ import UIKit
 
 public enum ScenePresentationStyle : String, Sendable {
     case sharedVolumetric = "shared-volumetric"
-    case primary2D = "primary-2d"
     case sharedPortal = "shared-portal"
     case immersive = "immersive"
 }
@@ -135,7 +134,6 @@ extension RealityView {
 
     private func handleEvent(event: SpatialEventCollection.Event, value: Value, delegate: GDRKBridgeDelegate?, root: RealityKit.Entity, size: Size, ended: Bool) {
         let eventID = event.id.hashValue
-        if event.phase == .cancelled { delegate?.cancelSpatialPress(Int64(eventID)); return }
 
 #if os(macOS)
         let position3D: SIMD3<Float>? = nil
@@ -144,12 +142,10 @@ extension RealityView {
 #endif
 
         guard let ray = self.calculateRay(delegate: delegate, event: event, value: value, size: size) else {
-            if ended { delegate?.cancelSpatialPress(Int64(eventID)) }
             return
         }
 
         guard let hits = root.scene?.raycast(origin: ray.origin, direction: ray.direction) else {
-            if ended { delegate?.cancelSpatialPress(Int64(eventID)) }
             return
         }
 
@@ -178,8 +174,8 @@ extension RealityView {
         let selectionRay: GDRKRay? = nil
 #else
         let selectionRay = event.selectionRay.map{ ray in
-            return GDRKRay(origin: root.convert(position: value.convert(ray.origin, from: .local, to: .scene), from: nil),
-                         direction: root.convert(direction: value.convert(ray.direction, from: .local, to: .scene), from: nil))
+            return GDRKRay(origin: root.convert(position: value.convert(ray.origin, from: .local, to: .scene), to: nil),
+                         direction: root.convert(direction: value.convert(ray.direction, from: .local, to: .scene), to: nil))
         }
 #endif
 
@@ -248,6 +244,7 @@ extension RealityView {
 class PortalRealityViewState {
     var lastViewBounds: BoundingBox? = nil
     var lastCageScale: Float? = nil
+    var lastPortalPlanes: [Float]? = nil
 }
 
 // Workaround for : RealityKit's RealityView does not receive
@@ -315,9 +312,10 @@ struct PortalRealityView : View {
         return 1.0 / pow(10.0, self.worldScaleExponent)
     }
 
-    // Set via reality_kit/portal_presentation_world_scale; 0 means unset, use the interactive slider instead.
+    // Set by the portal Window's RealityPortalCamera3D, or else via
+    // reality_kit/portal_presentation_world_scale; 0 means unset, use the interactive slider instead.
     private var fixedWorldScale: Float {
-        delegate?.getExtensionSettings().portalWorldScale ?? 0
+        delegate?.getPortalWorldScale() ?? 0
     }
 
     private var handlesGameControllerEvents: Bool {
@@ -340,7 +338,7 @@ struct PortalRealityView : View {
             RealityView(make: { content in
                 self.root.components.set(WorldComponent())
 
-                self.portal.components.set(PortalComponent(target: self.root))
+                self.updatePortalPlanes()
 
                 content.add(self.root)
                 content.add(self.portal)
@@ -368,6 +366,7 @@ struct PortalRealityView : View {
                 if let target = self.interactionTarget {
                     self.updateInteractionTarget(target, in: proxy)
                 }
+                self.updatePortalPlanes()
 
                 self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
             })
@@ -387,6 +386,28 @@ struct PortalRealityView : View {
 
     private func onSceneUpdate(event: SceneEvents.Update) {
         self.updateCamera()
+        self.updatePortalPlanes()
+    }
+
+    // Clipping and crossing planes from the portal's RealityPortalCamera3D,
+    // in the portal plane's space, as RealityPortalMeshInstance3D's.
+    private func updatePortalPlanes() {
+        let planes = delegate?.getPortalPlanes() ?? GDRKPortalPlanes()
+        let key = [planes.clipping ? 1 : 0, planes.crossing ? 1 : 0].map(Float.init)
+            + [planes.clipping_position, planes.clipping_normal, planes.crossing_position, planes.crossing_normal].flatMap { [$0.x, $0.y, $0.z] }
+        if state.lastPortalPlanes == key {
+            return
+        }
+        state.lastPortalPlanes = key
+
+        func normal(_ value: SIMD3<Float>) -> SIMD3<Float> {
+            simd_length(value) > 0 ? simd_normalize(value) : SIMD3<Float>(0, 0, 1)
+        }
+        let clipping: PortalComponent.ClippingMode = planes.clipping
+            ? .plane(.init(position: planes.clipping_position, normal: normal(planes.clipping_normal))) : .disabled
+        let crossing: PortalComponent.CrossingMode = planes.crossing
+            ? .plane(.init(position: planes.crossing_position, normal: normal(planes.crossing_normal))) : .disabled
+        self.portal.components.set(PortalComponent(target: self.root, clippingMode: clipping, crossingMode: crossing))
     }
 
     private func updateCamera() {
@@ -461,195 +482,22 @@ struct ImmersiveRealityView : View {
     }
 }
 
-// Explicit ARKit ownership gives us provider lifecycle events and valid tracking states.
-// SpatialTrackingSession is not also run for these controllers: one owner publishes poses.
-@MainActor
-final class SharedAccessoryTracking {
-    static let shared = SharedAccessoryTracking()
-    private var clients = 0
-    func synchronize() {
-        let enabled = Bridge.delegate?.controllerTrackingEnabled() ?? false
-        if enabled && clients == 0 { acquire() }
-        if !enabled && clients > 0 { release() }
-        guard enabled else { return }
-        for hand in [ControllerHand.leftHand, .rightHand] {
-            let pointer = controllers[hand].map { Unmanaged.passUnretained($0).toOpaque() }
-            Bridge.delegate?.setControllerInput(hand, pointer, locations[hand] ?? 0)
-        }
-    }
-    func stop() { clients = 0; worker?.cancel() }
-    private(set) var locations: [ControllerHand: UInt32] = [:]
-    func report(_ error: String = "") {
-        error.withCString { Bridge.delegate?.setControllerTrackingState(running, $0) }
-    }
-    private var worker: Task<Void, Never>?
-    private var disconnectObserver: NSObjectProtocol?
-    private init() {
-        disconnectObserver = NotificationCenter.default.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] notification in
-            guard let controller = notification.object as? GCController else { return }
-            let identity = ObjectIdentifier(controller)
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                for hand in [ControllerHand.leftHand, .rightHand] where self.controllers[hand].map(ObjectIdentifier.init) == identity {
-                    self.controllers.removeValue(forKey: hand)
-                    self.locations.removeValue(forKey: hand)
-                    self.anchors.removeValue(forKey: hand)
-                    Bridge.delegate?.setControllerInput(hand, nil, 0)
-                }
-            }
-        }
-    }
-    func acquire() {
-        clients += 1
-        guard clients == 1 else { return }
-        let previous = worker
-        worker = Task { @MainActor in
-            await previous?.value
-            guard !Task.isCancelled else { return }
-            await self.run()
-        }
-    }
-    func release() {
-        clients = max(0, clients - 1)
-        if clients == 0 { worker?.cancel() }
-    }
-    private let session = ARKitSession()
-    private(set) var anchors: [ControllerHand: AccessoryAnchor] = [:]
-    private(set) var anchorUpdated: [ControllerHand: CFTimeInterval] = [:]
-    private(set) var controllers: [ControllerHand: GCController] = [:]
-    private(set) var running = false
-    private var provider: AccessoryTrackingProvider?
-    private var anchorTask: Task<Void, Never>?
-    private var trackingStates: [ControllerHand: String] = [:]
-
-    func run() async {
-        guard AccessoryTrackingProvider.isSupported else {
-            NSLog("[GDRK Tracking] AccessoryTrackingProvider unsupported")
-            return
-        }
-        let events = Task { @MainActor [weak self, session] in
-            for await event in session.events {
-                guard !Task.isCancelled else { break }
-                guard let self else { break }
-                switch event {
-                case .dataProviderStateChanged(_, let state, let error):
-                    // Use our current provider state; an old provider can stop on reconnect.
-                    self.running = self.provider?.state == .running
-                    if !self.running { self.anchors.removeAll() }
-                    self.report(error.map { String(describing: $0) } ?? "")
-                    NSLog("[GDRK Tracking] provider event=\(state) current=\(String(describing: self.provider?.state)) error=\(String(describing: error))")
-                case .authorizationChanged(let type, let status):
-                    NSLog("[GDRK Tracking] authorization \(type)=\(status)")
-                    if status == .denied { self.report("Accessory tracking authorization denied") }
-                default: break
-                }
-            }
-        }
-        defer {
-            events.cancel()
-            anchorTask?.cancel()
-            session.stop()
-            provider = nil
-            running = false
-            anchors.removeAll()
-            controllers.removeAll(); locations.removeAll()
-            report()
-            for hand in [ControllerHand.leftHand, .rightHand] { Bridge.delegate?.setControllerInput(hand, nil, 0) }
-        }
-        var previous: Set<ObjectIdentifier>? = nil
-        // Polling also handles controllers already connected before notification registration.
-        // Reconfiguration is serialized, so two connects cannot race session.run().
-        while !Task.isCancelled {
-            let connected = GCController.controllers().filter {
-                $0.productCategory == GCProductCategorySpatialController
-            }
-            let identities = Set(connected.map(ObjectIdentifier.init))
-            if identities != previous {
-                previous = identities
-                anchorTask?.cancel()
-                session.stop()
-                running = false
-                anchors.removeAll()
-                controllers = controllers.filter { identities.contains(ObjectIdentifier($0.value)) }
-                locations = locations.filter { controllers[$0.key] != nil }
-                trackingStates.removeAll()
-                var accessories: [Accessory] = []
-                for controller in connected {
-                    do {
-                        let accessory = try await Accessory(device: controller)
-                        guard !Task.isCancelled else { return }
-                        let hand: ControllerHand
-                        switch accessory.inherentChirality {
-                        case .left: hand = .leftHand
-                        case .right: hand = .rightHand
-                        default: continue
-                        }
-                        accessories.append(accessory)
-                        controllers[hand] = controller
-                        locations[hand] = (accessory.locations.contains(.grip) ? 1 : 0) |
-                            (accessory.locations.contains(.aim) ? 2 : 0) | (accessory.locations.contains(.gripSurface) ? 4 : 0)
-                        NSLog("[GDRK Tracking] configured \(controller.vendorName ?? "controller") hand=\(hand)")
-                    } catch {
-                        self.report("Accessory setup failed: \(error)")
-                    }
-                }
-                if !accessories.isEmpty {
-                    let next = AccessoryTrackingProvider(accessories: accessories)
-                    provider = next
-                    do {
-                        try await session.run([next])
-                        guard !Task.isCancelled else { return }
-                        running = next.state == .running
-                        report()
-                        NSLog("[GDRK Tracking] session.run returned; provider=\(next.state), accessories=\(accessories.count)")
-                        anchorTask = Task { @MainActor [weak self] in
-                            for await update in next.anchorUpdates {
-                                guard !Task.isCancelled else { break }
-                                guard let self else { break }
-                                self.running = next.state == .running
-                                let hand: ControllerHand
-                                switch update.anchor.accessory.inherentChirality {
-                                case .left: hand = .leftHand
-                                case .right: hand = .rightHand
-                                default: continue
-                                }
-                                let status = "\(update.event):\(update.anchor.trackingState)"
-                                if self.trackingStates[hand] != status {
-                                    self.trackingStates[hand] = status
-                                    NSLog("[GDRK Tracking] hand=\(hand) anchor=\(status)")
-                                }
-                                switch update.event {
-                                case .added, .updated:
-                                    self.anchors[hand] = update.anchor
-                                    self.anchorUpdated[hand] = CACurrentMediaTime()
-                                case .removed:
-                                    self.anchors.removeValue(forKey: hand)
-                                }
-                            }
-                        }
-                    } catch {
-                        self.report("Accessory tracking failed: \(error)")
-                    }
-                } else {
-                    provider = nil
-                    NSLog("[GDRK Tracking] no spatial accessories to run")
-                }
-            }
-            do { try await Task.sleep(for: .milliseconds(500)) }
-            catch { break }
-        }
-    }
-}
-
-@MainActor
 class SharedVolumetricRealityViewState {
     var lastCameraTransform: Transform? = nil
     var lastViewBounds: BoundingBox? = nil
     var lastScale: Float? = nil
-    let tracking = SharedAccessoryTracking.shared
-    var trackingLease: UUID?
-    var lastPoseLog: TimeInterval = 0
-    var poseStatus: [ControllerHand: String] = [:]
+
+    // Spatial-accessory anchoring state.
+    var spatialTrackingSession: SpatialTrackingSession? = nil
+    var connectObserver: NSObjectProtocol? = nil
+    var pendingControllers: [GCController] = []
+    // An AnchorEntity(.accessory) resolves asynchronously, but content.add() has to run
+    // synchronously in the update closure, so resolved anchors wait here until the next tick.
+    var resolvedAnchors: [ControllerHand: AnchorEntity] = [:]
+    var anchors: [ControllerHand: AnchorEntity] = [:]
+    // The GCController anchored per hand, polled each frame for button / thumbstick input.
+    var controllers: [ControllerHand: GCController] = [:]
+    var trackingStarted: Bool = false
 }
 
 // Shows the Godot scene in a volumetric window.
@@ -657,13 +505,12 @@ class SharedVolumetricRealityViewState {
 // scaled to fit the volumetric window.
 // otherwise it scales down the whole world to fit in the volumetric window
 struct SharedVolumetricRealityView : View {
-    @Environment(\.scenePhase) private var scenePhase
     let root: RealityKit.Entity
     let delegate: GDRKBridgeDelegate?
 
-    @State private var anchor = RealityKit.Entity()
+    let anchor = RealityKit.Entity()
 
-    @State private var state = SharedVolumetricRealityViewState()
+    let state = SharedVolumetricRealityViewState()
 
     @State private var subscription: EventSubscription? = nil
 
@@ -677,53 +524,131 @@ struct SharedVolumetricRealityView : View {
             }, update: { content in
                    let viewBounds = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
                    self.updateCamera(viewBounds: viewBounds)
-                   self.delegate?.onVolumeSizeChanged(viewBounds.extents)
                    self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
+                   self.updateAccessoryAnchors(content: content)
             })
              .installGestures(delegate: self.delegate, root: self.root, size: proxy.size)
             .realityViewLayoutBehavior(.flexible)
             .setupProjectSettings(from: delegate)
-            .onDisappear {
-                for hand in [ControllerHand.leftHand, .rightHand] {
-                    self.delegate?.setControllerAnchor(hand, GDRKTransform(scale: .one, position: .zero, orientation: simd_quatf()), false)
+        }
+    }
+
+    // Keeps an AnchorEntity(.accessory) attached to each connected spatial controller. Runs only
+    // while the engine's shared-volume controller interface is live, which is what keeps
+    // accessory tracking off in other presentation styles and when controller tracking is
+    // disabled.
+    private func updateAccessoryAnchors(content: RealityViewContent) {
+        guard self.delegate?.wantsControllerAnchors() ?? false else { return }
+
+        self.startAccessoryTrackingIfNeeded()
+
+        for (hand, anchor) in self.state.resolvedAnchors {
+            // Each connect gives the controller a new accessory identity, so the newest resolved
+            // anchor replaces what is installed; the one it replaces can no longer track.
+            if let stale = self.state.anchors[hand] {
+                content.remove(stale)
+            }
+            content.add(anchor)
+            self.state.anchors[hand] = anchor
+        }
+        self.state.resolvedAnchors.removeAll()
+
+        self.resolvePendingControllers()
+    }
+
+    // Starts the accessory tracking session and queues the spatial controllers for anchoring;
+    // an AnchorEntity(.accessory) only resolves once a live session is running.
+    private func startAccessoryTrackingIfNeeded() {
+        guard !self.state.trackingStarted else { return }
+        self.state.trackingStarted = true
+
+        Task { @MainActor in
+            let session = SpatialTrackingSession()
+            _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
+            self.state.spatialTrackingSession = session
+        }
+
+        self.state.connectObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.GCControllerDidConnect,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let controller = notification.object as? GCController,
+                  controller.productCategory == GCProductCategorySpatialController else { return }
+            self.state.pendingControllers.append(controller)
+        }
+
+        for controller in GCController.controllers()
+        where controller.productCategory == GCProductCategorySpatialController {
+            self.state.pendingControllers.append(controller)
+        }
+    }
+
+    // Resolves an anchoring source per queued controller and stages the resulting anchor for the
+    // next update tick.
+    private func resolvePendingControllers() {
+        guard !self.state.pendingControllers.isEmpty else { return }
+        let controllers = self.state.pendingControllers
+        self.state.pendingControllers.removeAll()
+
+        for controller in controllers {
+            Task { @MainActor in
+                do {
+                    let source = try await AnchoringComponent.AccessoryAnchoringSource(device: controller)
+                    guard let hand = Self.hand(of: source) else {
+                        NSLog("[GDRK] accessory anchor: controller reports no chirality; ignoring")
+                        return
+                    }
+                    // The startup scan and the connect notification can queue the same controller
+                    // twice, so bail if this device is anchored — but let a different one replace it.
+                    if let anchored = self.state.controllers[hand], anchored === controller {
+                        return
+                    }
+                    guard let location = source.locationName(named: "grip") else {
+                        NSLog("[GDRK] accessory anchor: no 'grip' location for controller")
+                        return
+                    }
+                    self.state.resolvedAnchors[hand] = AnchorEntity(.accessory(from: source, location: location),
+                                                                    trackingMode: .predicted)
+                    self.state.controllers[hand] = controller
+                } catch {
+                    NSLog("[GDRK] AccessoryAnchoringSource init failed: \(error)")
                 }
             }
         }
     }
 
-    // CoordinateSpace3D conversion includes the volume camera's world scale/rotation.
-    // Raw ARKit world transforms must never be sent directly to Godot scene-local trackers.
+    // Spatial controllers come as a handed pair, so the accessory's inherent chirality is the
+    // hand it is held in.
+    private static func hand(of source: AnchoringComponent.AccessoryAnchoringSource) -> ControllerHand? {
+        switch source.underlyingAccessory?.inherentChirality {
+        case .left: return .leftHand
+        case .right: return .rightHand
+        default: return nil
+        }
+    }
+
+    // Pushes each anchored controller's scene-root-local transform to the engine, once per frame.
     private func publishControllerPoses() {
-        guard scenePhase != .background, let delegate, delegate.wantsControllerAnchors() else { return }
-        let locations: [Accessory.LocationName] = [.grip, .aim, .gripSurface]
-        for hand in [ControllerHand.leftHand, .rightHand] {
-            let accessory = state.tracking.anchors[hand]
-            for (index, location) in locations.enumerated() {
-                var pose = Transform()
-                var velocity = SIMD3<Float>.zero
-                var angular = SIMD3<Float>.zero
-                var confidence: Int32 = 0
-                let supported = (state.tracking.locations[hand] ?? 0) & (1 << index) != 0
-                if supported, state.tracking.running, CACurrentMediaTime() - (state.tracking.anchorUpdated[hand] ?? 0) < 0.5, let accessory,
-                   accessory.trackingState == .positionOrientationTracked || accessory.trackingState == .positionOrientationTrackedLowAccuracy {
-                    do {
-                        pose = Transform(matrix: try root.transform(from: accessory.coordinateSpace(for: location, correction: .none)).matrix)
-                        let anchor = Transform(matrix: try root.transform(from: accessory.coordinateSpace(correction: .none)).matrix)
-                        // ARKit velocities use the accessory's coordinate space. Translation is
-                        // converted to Godot units; angular velocity is rotated, never scaled.
-                        angular = anchor.rotation.act(accessory.angularVelocity)
-                        velocity = anchor.rotation.act(anchor.scale * accessory.velocity) + simd_cross(angular, pose.translation - anchor.translation)
-                        confidence = accessory.trackingState == .positionOrientationTracked ? 2 : 1
-                    } catch {
-                        let message = "Volume coordinate conversion failed: \(error)"
-                        if state.poseStatus[hand] != message {
-                            state.poseStatus[hand] = message
-                            message.withCString { delegate.setControllerTrackingState(state.tracking.running, $0) }
-                        }
-                    }
-                }
-                delegate.setControllerPose(hand, Int32(index), GDRKTransform(scale: .one, position: pose.translation, orientation: pose.rotation), velocity, angular, confidence, supported)
-            }
+        guard let delegate = self.delegate, !self.state.anchors.isEmpty else { return }
+
+        for (hand, anchor) in self.state.anchors {
+            let t = Transform(matrix: anchor.transformMatrix(relativeTo: self.root))
+            delegate.setControllerAnchor(hand, GDRKTransform(
+                scale: t.scale,
+                position: t.translation,
+                orientation: t.rotation
+            ), anchor.isAnchored)
+        }
+    }
+
+    // Pushes each anchored controller to the engine once per frame; the engine samples its
+    // buttons / thumbstick (via GameController) so XRController3D's button_pressed keeps working.
+    private func publishControllerInputs() {
+        guard let delegate = self.delegate, !self.state.controllers.isEmpty else { return }
+
+        for (hand, controller) in self.state.controllers {
+            delegate.setControllerInput(hand, Unmanaged.passUnretained(controller).toOpaque())
         }
     }
 
@@ -732,7 +657,7 @@ struct SharedVolumetricRealityView : View {
             self.updateCamera(viewBounds: viewBounds)
         }
         self.publishControllerPoses()
-
+        self.publishControllerInputs()
     }
 
     private func updateCamera(viewBounds: BoundingBox) {
@@ -823,21 +748,16 @@ class LoadingViewController: UIViewController {
 
         guard let request = UISceneSessionActivationRequest(hostingDelegateClass: BridgeScene.self, id: Bridge.presentationStyle.rawValue) else {
             print("Unable to create gdrk UISceneSessionActivationRequest!")
-            if Bridge.presentationStyle == .sharedVolumetric { Bridge.volumeWindows[0]?.activationFailed("Unable to create main volume activation request") }
             return
         }
 
-        if Bridge.presentationStyle == .sharedVolumetric { Bridge.volumeWindows[0]?.watchActivation() }
         UIApplication.shared.activateSceneSession(for: request) { error in
             print("Error activating gdrk scene session: \(error)")
-            if Bridge.presentationStyle == .sharedVolumetric { Bridge.volumeWindows[0]?.activationFailed(error.localizedDescription) }
         }
     }
 }
 
 class GodotViewController: UIViewController {
-    private static var activeControllers: [GodotViewController] = []
-    private static var drawing = false
     let godotViewController: UIViewController? = Bridge.originalViewController
 
     var displayLink: CADisplayLink? = nil
@@ -849,22 +769,23 @@ class GodotViewController: UIViewController {
     }
 
     func startRendering() {
-        guard !self.isActive, let godotView = godotViewController?.view else { return }
-        self.isActive = true
-        Self.activeControllers.append(self)
-        displayLink = CADisplayLink(target: self, selector: #selector(update))
-        if let framerate = godotView.value(forKey: "preferredFrameRate") as? Int {
-            displayLink?.preferredFramesPerSecond = framerate
+        if self.isActive {
+            return
         }
-        displayLink?.add(to: .current, forMode: .common)
-        displayLink?.isPaused = Self.activeControllers.first !== self
+
+        self.isActive = true
+
+        if let godotView = godotViewController?.view {
+            displayLink = CADisplayLink(target: self, selector: #selector(update))
+            if let framerate = godotView.value(forKey: "preferredFrameRate") as? Int {
+                displayLink?.preferredFramesPerSecond = framerate
+            }
+            displayLink?.add(to: .current, forMode: .common)
+        }
     }
 
     @objc
     func update() {
-        guard Self.activeControllers.first === self, !Self.drawing else { return }
-        Self.drawing = true
-        SharedAccessoryTracking.shared.synchronize()
         // The problem: inside drawView, Godot temporarily hands control back to the system's main
         // run loop (the mechanism iOS uses to process events like touches, timers, and other
         // callbacks while an app is idle) so that any input events waiting to be delivered get
@@ -880,10 +801,6 @@ class GodotViewController: UIViewController {
         // its own, so it can't fire again while we're still inside drawView. Resume it once
         // drawView returns.
         displayLink?.isPaused = true
-        defer {
-            Self.drawing = false
-            if Self.activeControllers.first === self { displayLink?.isPaused = false }
-        }
 
         if let godotView = godotViewController?.view {
             // If the view was active, it means that the a display link is installed to update the
@@ -908,6 +825,7 @@ class GodotViewController: UIViewController {
             godotView.setValue(false, forKey: "isActive")
         }
 
+        displayLink?.isPaused = false
     }
 
     func stopRendering() {
@@ -916,12 +834,8 @@ class GodotViewController: UIViewController {
         }
 
         self.isActive = false
-        let wasDriver = Self.activeControllers.first === self
-        Self.activeControllers.removeAll { $0 === self }
+
         self.displayLink?.invalidate()
-        self.displayLink = nil
-        if wasDriver { Self.activeControllers.first?.displayLink?.isPaused = false }
-        if Self.activeControllers.isEmpty { SharedAccessoryTracking.shared.stop() }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -950,659 +864,24 @@ struct GodotViewControllerRepresentable : UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: GodotViewController, context: Context) {}
-
-    static func dismantleUIViewController(_ uiViewController: GodotViewController, coordinator: ()) {
-        uiViewController.stopRendering()
-    }
-}
-
-// The numeric values match GDRKBridgeDelegate::get2DWindowPlacement. Each mode
-// has its own WindowGroup because defaultWindowPlacement receives the group ID,
-// not the value identifying an individual Godot Window.
-private enum Godot2DPlacement: Int32, CaseIterable {
-    case automatic = 0
-    case utilityPanel = 1
-    case leading = 2
-    case trailing = 3
-    case above = 4
-    case below = 5
-
-    var sceneID: String { "gdrk-2d-\(rawValue)" }
-
-    func placement(in context: WindowPlacementContext) -> WindowPlacement {
-        if self == .utilityPanel { return WindowPlacement(.utilityPanel) }
-        guard let volume = context.windows.first(where: { $0.id == ScenePresentationStyle.sharedVolumetric.rawValue }) else {
-            return WindowPlacement()
-        }
-        switch self {
-        case .leading: return WindowPlacement(.leading(volume))
-        case .trailing: return WindowPlacement(.trailing(volume))
-        case .above: return WindowPlacement(.above(volume))
-        case .below: return WindowPlacement(.below(volume))
-        case .automatic, .utilityPanel: return WindowPlacement()
-        }
-    }
-
-    static func primaryVolumePlacement(in context: WindowPlacementContext) -> WindowPlacement {
-        // If an auxiliary window opened first, place the primary volume on its
-        // opposite side. This makes the order of opening the two windows safe.
-        for window in context.windows {
-            guard let id = window.id,
-                  let mode = allCases.first(where: { $0.sceneID == id }) else { continue }
-            switch mode {
-            case .leading: return WindowPlacement(.trailing(window))
-            case .trailing: return WindowPlacement(.leading(window))
-            case .above: return WindowPlacement(.below(window))
-            case .below: return WindowPlacement(.above(window))
-            case .automatic, .utilityPanel: continue
-            }
-        }
-        return WindowPlacement()
-    }
-}
-
-private struct Godot2DSessionKey: Codable, Hashable {
-    let id: UInt64
-    let generation: UInt64
-}
-
-@MainActor private enum Godot2DWindowRequests {
-    static var opened = Set<UInt64>()
-    private static var observers: [NSObjectProtocol] = []
-    private static var generations: [UInt64: UInt64] = [:]
-    private struct Pending {
-        let mode: Godot2DPlacement
-        let generation: UInt64
-    }
-    private static var pending: [UInt64: Pending] = [:]
-    private static var volumeOpener: (token: UUID, action: OpenWindowAction)?
-    private static var presentedGenerations: [UInt64: UInt64] = [:]
-    private static var windowScenes: [UInt64: UIWindowScene] = [:]
-    private static var disconnectObservers: [UInt64: NSObjectProtocol] = [:]
-
-    static func isCurrent(_ key: Godot2DSessionKey) -> Bool {
-        opened.contains(key.id) && generations[key.id] == key.generation
-    }
-
-    static func markPresented(_ key: Godot2DSessionKey) {
-        if isCurrent(key) {
-            presentedGenerations[key.id] = key.generation
-            Bridge.delegate?.set2DWindowNativeOpen(key.id, true)
-            NSLog("[GDRK 2D Window] presented id=\(key.id) generation=\(key.generation)")
-        }
-    }
-
-    static func attachScene(_ scene: UIWindowScene, to key: Godot2DSessionKey) {
-        guard isCurrent(key), windowScenes[key.id] !== scene else { return }
-        let id = key.id
-        if let old = disconnectObservers.removeValue(forKey: id) {
-            NotificationCenter.default.removeObserver(old)
-        }
-        windowScenes[id] = scene
-        NSLog("[GDRK 2D Window] attached native scene id=\(id) generation=\(key.generation)")
-        let sessionID = scene.session.persistentIdentifier
-        let generation = key.generation
-        disconnectObservers[id] = NotificationCenter.default.addObserver(
-            forName: UIScene.didDisconnectNotification, object: scene, queue: .main
-        ) { _ in
-            MainActor.assumeIsolated {
-                guard windowScenes[id] === scene else { return }
-                windowScenes.removeValue(forKey: id)
-                if let observer = disconnectObservers.removeValue(forKey: id) {
-                    NotificationCenter.default.removeObserver(observer)
-                }
-                Bridge.delegate?.set2DWindowNativeOpen(id, false)
-                NSLog("[GDRK 2D Window] native scene disconnected id=\(id)")
-                verifyDisconnectedSession(id, sessionID: sessionID, generation: generation, attempt: 0)
-            }
-        }
-    }
-
-    private static func verifyDisconnectedSession(_ id: UInt64, sessionID: String, generation: UInt64, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.5 : 1.5)) {
-            MainActor.assumeIsolated {
-                guard opened.contains(id), generations[id] == generation, windowScenes[id] == nil else { return }
-                if UIApplication.shared.openSessions.contains(where: { $0.persistentIdentifier == sessionID }) {
-                    if attempt < 2 { verifyDisconnectedSession(id, sessionID: sessionID, generation: generation, attempt: attempt + 1) }
-                    else { NSLog("[GDRK 2D Window] scene archived; keeping Godot window id=\(id)") }
-                    return
-                }
-                opened.remove(id)
-                pending.removeValue(forKey: id)
-                presentedGenerations.removeValue(forKey: id)
-                generations[id] = generation + 1
-                NSLog("[GDRK 2D Window] native session closed id=\(id)")
-                Bridge.delegate?.set2DWindowNativeOpen(id, false)
-                Bridge.delegate?.on2DWindowClosed(id)
-            }
-        }
-    }
-
-    private static func watchPresentation(_ id: UInt64, generation: UInt64) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
-            MainActor.assumeIsolated {
-                guard opened.contains(id), generations[id] == generation,
-                      presentedGenerations[id] != generation, windowScenes[id] == nil else { return }
-                opened.remove(id)
-                pending.removeValue(forKey: id)
-                generations[id] = generation + 1
-                NSLog("[GDRK 2D Window] activation timed out id=\(id)")
-                Bridge.delegate?.set2DWindowNativeOpen(id, false)
-                "The native controls window did not appear".withCString {
-                    Bridge.delegate?.on2DWindowFailed(id, $0)
-                }
-            }
-        }
-    }
-
-    static func registerVolumeOpener(_ action: OpenWindowAction, token: UUID) {
-        volumeOpener = (token, action)
-        let waiting = pending
-        pending.removeAll()
-        for (id, request) in waiting where opened.contains(id) && generations[id] == request.generation {
-            watchPresentation(id, generation: request.generation)
-            action(id: request.mode.sceneID, value: Godot2DSessionKey(id: id, generation: request.generation))
-        }
-    }
-
-    static func unregisterVolumeOpener(token: UUID) {
-        if volumeOpener?.token == token { volumeOpener = nil }
-    }
-
-    private static func openWithUIKit(_ id: UInt64, mode: Godot2DPlacement, generation: UInt64) {
-        let key = Godot2DSessionKey(id: id, generation: generation)
-        guard var request = UISceneSessionActivationRequest(hostingDelegateClass: BridgeScene.self, id: mode.sceneID, value: key) else {
-            opened.remove(id)
-            Bridge.delegate?.set2DWindowNativeOpen(id, false)
-            "Unable to create 2D activation request".withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
-            return
-        }
-        let options = UIWindowScene.ActivationRequestOptions()
-        options.requestingScene = Bridge.volumeWindows[0]?.scene ?? Bridge.primary2DScene ?? Bridge.originalScene
-        request.options = options
-        watchPresentation(id, generation: generation)
-        UIApplication.shared.activateSceneSession(for: request) { error in
-            guard generations[id] == generation, opened.contains(id),
-                  presentedGenerations[id] != generation, windowScenes[id] == nil else { return }
-            opened.remove(id)
-            Bridge.delegate?.set2DWindowNativeOpen(id, false)
-            error.localizedDescription.withCString { Bridge.delegate?.on2DWindowFailed(id, $0) }
-        }
-    }
-
-    private static func scheduleUIKitFallback(_ id: UInt64, generation: UInt64) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            MainActor.assumeIsolated {
-                guard let waiting = pending[id], waiting.generation == generation,
-                      opened.contains(id), generations[id] == generation else { return }
-                // Godot may synchronously import a large file before SwiftUI can
-                // show the primary volume. Keep its request in the queue until
-                // the volume appears or its own activation reports failure.
-                if let volume = Bridge.volumeWindows[0], volume.opening && !volume.finished {
-                    scheduleUIKitFallback(id, generation: generation)
-                    return
-                }
-                pending.removeValue(forKey: id)
-                openWithUIKit(id, mode: waiting.mode, generation: generation)
-            }
-        }
-    }
-
-    static func install() {
-        guard observers.isEmpty else { return }
-        observers.append(NotificationCenter.default.addObserver(forName: Notification.Name("org.godotengine.visionos.openWindow"), object: nil, queue: .main) { notification in
-            guard let id = notification.object as? UInt64 else { return }
-            (notification.userInfo?["routing"] as? NSMutableDictionary)?["claimed"] = true
-            MainActor.assumeIsolated {
-                if GodotOrnaments.shared.openIfRequested(id) { return }
-                guard opened.insert(id).inserted else { return }
-                let generation = (generations[id] ?? 0) + 1
-                generations[id] = generation
-                presentedGenerations.removeValue(forKey: id)
-                Bridge.delegate?.set2DWindowNativeOpen(id, false)
-                let mode = Godot2DPlacement(rawValue: Bridge.delegate?.get2DWindowPlacement(id) ?? 0) ?? .automatic
-                if Bridge.presentationStyle == .sharedVolumetric {
-                    if let action = volumeOpener?.action {
-                        watchPresentation(id, generation: generation)
-                        action(id: mode.sceneID, value: Godot2DSessionKey(id: id, generation: generation))
-                    } else {
-                        pending[id] = Pending(mode: mode, generation: generation)
-                        scheduleUIKitFallback(id, generation: generation)
-                    }
-                } else {
-                    openWithUIKit(id, mode: mode, generation: generation)
-                }
-            }
-        })
-        observers.append(NotificationCenter.default.addObserver(forName: Notification.Name("org.godotengine.visionos.closeWindow"), object: nil, queue: .main) { notification in
-            guard let id = notification.object as? UInt64 else { return }
-            MainActor.assumeIsolated {
-                GodotOrnaments.shared.remove(id)
-                opened.remove(id)
-                pending.removeValue(forKey: id)
-                presentedGenerations.removeValue(forKey: id)
-                windowScenes.removeValue(forKey: id)
-                if let observer = disconnectObservers.removeValue(forKey: id) {
-                    NotificationCenter.default.removeObserver(observer)
-                }
-                generations[id] = (generations[id] ?? 0) + 1
-                Bridge.delegate?.set2DWindowNativeOpen(id, false)
-            }
-        })
-        GodotOrnaments.shared.install()
-    }
-}
-
-@MainActor private enum GodotSceneVisibility {
-    static var foregroundScenes = Set<UUID>()
-
-    static func update(_ id: UUID, phase: ScenePhase) {
-        if phase == .background {
-            foregroundScenes.remove(id)
-        } else {
-            foregroundScenes.insert(id)
-        }
-        Bridge.sceneVisible = !foregroundScenes.isEmpty
-    }
-
-    static func remove(_ id: UUID) {
-        foregroundScenes.remove(id)
-        Bridge.sceneVisible = !foregroundScenes.isEmpty
-    }
-}
-
-private struct GodotSceneVisibilityBridge: ViewModifier {
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var id = UUID()
-
-    func body(content: Content) -> some View {
-        content
-            .onAppear { GodotSceneVisibility.update(id, phase: scenePhase) }
-            .onDisappear { GodotSceneVisibility.remove(id) }
-            .onChange(of: scenePhase) { _, phase in
-                GodotSceneVisibility.update(id, phase: phase)
-            }
-    }
-}
-
-private struct Godot2DWindowController: UIViewControllerRepresentable {
-    let id: UInt64
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        guard let controllerType = NSClassFromString("GDTViewController") as? UIViewController.Type else {
-            assertionFailure("Godot 2D window controller is unavailable")
-            return UIViewController()
-        }
-        let controller = controllerType.init(nibName: nil, bundle: nil)
-        controller.setValue(NSNumber(value: id), forKey: "godotWindowID")
-        return controller
-    }
-
-    func updateUIViewController(_ controller: UIViewController, context: Context) {}
-}
-
-private struct Godot2DHostObserver: UIViewRepresentable {
-    let key: Godot2DSessionKey
-
-    final class Probe: UIView {
-        var key: Godot2DSessionKey?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard let scene = window?.windowScene, let key else { return }
-            Task { @MainActor in Godot2DWindowRequests.attachScene(scene, to: key) }
-        }
-    }
-
-    func makeUIView(context: Context) -> Probe {
-        let view = Probe()
-        view.key = key
-        return view
-    }
-
-    func updateUIView(_ view: Probe, context: Context) { view.key = key }
-}
-
-private struct Godot2DWindow: View {
-    let key: Godot2DSessionKey
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        Godot2DWindowController(id: key.id)
-            .overlay { GodotViewControllerRepresentable().allowsHitTesting(false) }
-            .background { Godot2DHostObserver(key: key).frame(width: 0, height: 0).allowsHitTesting(false) }
-            .ignoresSafeArea()
-            .onAppear {
-                if Godot2DWindowRequests.isCurrent(key) {
-                    Godot2DWindowRequests.markPresented(key)
-                } else {
-                    dismiss()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("org.godotengine.visionos.closeWindow"))) { notification in
-                if notification.object as? UInt64 == key.id {
-                    dismiss()
-                }
-            }
-    }
-}
-
-@MainActor private enum Godot2DWindowScenes {
-    static func windowGroup(_ mode: Godot2DPlacement) -> some SwiftUI.Scene {
-        WindowGroup("Godot 2D", id: mode.sceneID, for: Godot2DSessionKey.self) { $key in
-            if let key { Godot2DWindow(key: key).modifier(GodotSceneVisibilityBridge()) }
-        }
-        .defaultSize(width: 960, height: 600)
-        .defaultWindowPlacement { _, context in mode.placement(in: context) }
-        .restorationBehavior(.disabled)
-    }
-}
-
-private struct StaleVolumeWindow: View {
-    @Environment(\.dismiss) private var dismiss
-    var body: some View { Color.clear.onAppear { dismiss() } }
-}
-
-private struct VolumeSessionKey: Codable, Hashable {
-    let id: UInt64
-    let generation: UInt64
-}
-
-private struct Primary2DController: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIViewController {
-        guard let controller = Bridge.originalViewController else {
-            assertionFailure("The Godot main view controller is unavailable")
-            return UIViewController()
-        }
-        return controller
-    }
-
-    func updateUIViewController(_ controller: UIViewController, context: Context) {}
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: UIViewController, context: Context) -> CGSize? {
-        let preferred = Bridge.primary2DDefaultSize
-        let minimum = Bridge.primary2DMinimumSize
-        let width = proposal.width.flatMap { $0.isFinite ? max($0, minimum.width) : nil } ?? preferred.width
-        let height = proposal.height.flatMap { $0.isFinite ? max($0, minimum.height) : nil } ?? preferred.height
-        return CGSize(width: width, height: height)
-    }
-}
-
-private struct Primary2DHostObserver: UIViewRepresentable {
-    final class Probe: UIView {
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard let scene = window?.windowScene else { return }
-            Task { @MainActor in Bridge.attachPrimary2DScene(scene) }
-        }
-    }
-    func makeUIView(context: Context) -> Probe { Probe() }
-    func updateUIView(_ view: Probe, context: Context) {}
-}
-
-private struct Primary2DWindow: View {
-    @Environment(\.openWindow) private var openWindow
-    @State private var openerToken = UUID()
-
-    var body: some View {
-        Primary2DController()
-            .frame(minWidth: Bridge.primary2DMinimumSize.width,
-                   minHeight: Bridge.primary2DMinimumSize.height)
-            .background { Primary2DHostObserver().frame(width: 0, height: 0).allowsHitTesting(false) }
-            .ignoresSafeArea()
-            .modifier(GodotSceneVisibilityBridge())
-            .onAppear {
-                Bridge.registerPrimary2DOpener(openWindow, token: openerToken)
-                Godot2DWindowRequests.registerVolumeOpener(openWindow, token: openerToken)
-            }
-            .onDisappear {
-                Bridge.unregisterPrimary2DOpener(token: openerToken)
-                Godot2DWindowRequests.unregisterVolumeOpener(token: openerToken)
-            }
-    }
-}
-
-@MainActor @Observable
-final class VolumeWindowRecord {
-    let root: RealityKit.Entity
-    let delegate: GDRKBridgeDelegate
-    let id: UInt64
-    let generation: UInt64
-    let openerToken = UUID()
-    var title = ""
-    var initial = SIMD3<Float>.zero
-    var minimum = SIMD3<Float>.zero
-    var maximum = SIMD3<Float>.zero
-    var resizeMode: Int32 = 0
-    var baseplate: Int32 = 0
-    var fixedSize = SIMD3<Float>.zero
-    weak var scene: UIWindowScene?
-    var closeRequested = false
-    var finished = false
-    var opening = false
-    private var disconnectObserver: NSObjectProtocol?
-
-    init(root: RealityKit.Entity, delegate: GDRKBridgeDelegate, id: UInt64, generation: UInt64) {
-        self.root = root; self.delegate = delegate; self.id = id; self.generation = generation
-    }
-
-    func report(_ event: Int32, _ error: String = "") {
-        error.withCString { delegate.onVolumeWindowEvent(event, $0) }
-    }
-
-    func attach(_ scene: UIWindowScene) {
-        guard self.scene !== scene else { return }
-        self.scene = scene
-        if let observer = disconnectObserver { NotificationCenter.default.removeObserver(observer) }
-        disconnectObserver = NotificationCenter.default.addObserver(forName: UIScene.didDisconnectNotification, object: scene, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.scene = nil
-                self.opening = false
-                self.finished = true
-                self.report(1)
-            }
-        }
-        applyGeometry()
-        if closeRequested || finished || !delegate.isValid() { close(); return }
-        opening = false
-        report(0)
-    }
-
-    func applyGeometry() {
-        guard let scene else { return }
-        scene.title = title
-        // UIKit geometry preferences apply to planar windows. Volume resizing is
-        // expressed by the SwiftUI content bounds and windowResizability(.contentSize).
-
-    }
-
-    func close() {
-        closeRequested = true
-        guard let scene else {
-            if Bridge.presentationStyle == .primary2D && Bridge.cancelPendingPrimary2DVolume(self) {
-                opening = false; finished = true; report(1)
-                return
-            }
-            if !opening { finished = true; report(1) }
-            return
-        }
-        UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil) { [weak self] error in
-            guard let self, !self.finished else { return }
-            self.closeRequested = false
-            self.report(3, error.localizedDescription)
-        }
-    }
-
-    func activationFailed(_ message: String) {
-        guard !finished, scene == nil else { return }
-        opening = false; finished = true; report(2, message)
-    }
-
-    func watchActivation() {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(20))
-            guard let self, self.opening, self.scene == nil, !self.finished else { return }
-            self.activationFailed("The system did not create the requested volume")
-        }
-    }
-
-    func open() {
-        guard !opening, scene == nil else { return }
-        opening = true
-        if Bridge.presentationStyle == .primary2D {
-            Bridge.openPrimary2DVolume(self)
-            return
-        }
-        let key = VolumeSessionKey(id: id, generation: generation)
-        guard let request = UISceneSessionActivationRequest(hostingDelegateClass: AdditionalVolumeScene.self, id: "gdrk-extra-volume", value: key) else {
-            opening = false; finished = true; report(2, "Unable to create volume activation request"); return
-        }
-        UIApplication.shared.activateSceneSession(for: request) { [weak self] error in
-            guard let self, !self.finished, self.scene == nil else { return }
-            self.opening = false; self.finished = true; self.report(2, error.localizedDescription)
-        }
-        watchActivation()
-    }
-
-    isolated deinit {
-        if let disconnectObserver { NotificationCenter.default.removeObserver(disconnectObserver) }
-    }
-}
-
-private struct VolumeHostObserver: UIViewRepresentable {
-    let record: VolumeWindowRecord
-    final class Probe: UIView {
-        var record: VolumeWindowRecord?
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard let scene = window?.windowScene, let record else { return }
-            Task { @MainActor in record.attach(scene) }
-        }
-    }
-    func makeUIView(context: Context) -> Probe { let view = Probe(); view.record = record; return view }
-    func updateUIView(_ view: Probe, context: Context) { view.record = record }
-}
-
-private struct VolumeWindowContent: View {
-    let record: VolumeWindowRecord
-    @Environment(\.physicalMetrics) private var metrics
-    @Environment(\.openWindow) private var openWindow
-    private func points(_ value: Float) -> CGFloat? {
-        value > 0 ? metrics.convert(CGFloat(value), from: .meters) : nil
-    }
-    private func preferred(_ axis: Int) -> Float {
-        var value = record.initial[axis]
-        if value > 0 {
-            value = max(value, record.minimum[axis])
-            if record.maximum[axis] > 0 { value = min(value, record.maximum[axis]) }
-        }
-        return value
-    }
-    private func lower(_ axis: Int) -> CGFloat? {
-        if record.opening && preferred(axis) > 0 { return points(preferred(axis)) }
-        return points(record.resizeMode == 1 && record.fixedSize[axis] > 0 ? record.fixedSize[axis] : record.minimum[axis])
-    }
-    private func upper(_ axis: Int) -> CGFloat? {
-        if record.opening && preferred(axis) > 0 { return points(preferred(axis)) }
-        return points(record.resizeMode == 1 && record.fixedSize[axis] > 0 ? record.fixedSize[axis] : record.maximum[axis])
-    }
-    var body: some View {
-        SharedVolumetricRealityView(root: record.root, delegate: record.delegate)
-            .frame(minWidth: lower(0), idealWidth: points(record.initial.x), maxWidth: upper(0),
-                   minHeight: lower(1), idealHeight: points(record.initial.y), maxHeight: upper(1))
-            .frame(minDepth: lower(2), idealDepth: points(record.initial.z), maxDepth: upper(2))
-            .volumeBaseplateVisibility(record.baseplate == 1 ? .visible : (record.baseplate == 2 ? .hidden : .automatic))
-            .overlay {
-                if Bridge.presentationStyle != .primary2D {
-                    GodotViewControllerRepresentable()
-                }
-            }
-            .background { VolumeHostObserver(record: record).frame(width: 0, height: 0).allowsHitTesting(false) }
-            .ornament(attachmentAnchor: .scene(.bottom)) {
-                if !record.title.isEmpty && GodotOrnaments.shared.record(for: record.id) == nil {
-                    Text(record.title).padding(12).glassBackgroundEffect()
-                }
-            }
-            .modifier(GodotOrnamentModifier(volumeID: record.id))
-            .modifier(GodotSceneVisibilityBridge())
-            .onAppear {
-                if record.id == 0 { Godot2DWindowRequests.registerVolumeOpener(openWindow, token: record.openerToken) }
-            }
-            .onDisappear {
-                if record.id == 0 { Godot2DWindowRequests.unregisterVolumeOpener(token: record.openerToken) }
-            }
-    }
-}
-
-class AdditionalVolumeScene: NSObject, @MainActor UIHostingSceneDelegate {
-    static var rootScene: some SwiftUI.Scene {
-        WindowGroup("Godot 3D", id: "gdrk-extra-volume", for: VolumeSessionKey.self) { $key in
-            if let key, let record = Bridge.volumeWindows[key.id], record.generation == key.generation {
-                VolumeWindowContent(record: record)
-            } else {
-                StaleVolumeWindow()
-            }
-        }
-        .windowStyle(.volumetric)
-        .windowResizability(.contentSize)
-        .restorationBehavior(.disabled)
-    }
 }
 
 class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
-    private static var primary2DWindowScene: some SwiftUI.Scene {
-        let size = Bridge.primary2DDefaultSize
-        return Window("Godot Controls", id: ScenePresentationStyle.primary2D.rawValue) {
-            Primary2DWindow()
-        }
-        .defaultSize(width: size.width, height: size.height)
-        .windowStyle(.automatic)
-        .windowResizability(.contentMinSize)
-        .restorationBehavior(.disabled)
-    }
-
     static var rootScene: some SwiftUI.Scene {
-        primary2DWindowScene
-        WindowGroup("Godot 3D", id: "gdrk-primary-2d-volume", for: VolumeSessionKey.self) { $key in
-            if let key, let record = Bridge.volumeWindows[key.id], record.generation == key.generation {
-                VolumeWindowContent(record: record)
-            } else {
-                StaleVolumeWindow()
-            }
-        }
-        .windowStyle(.volumetric)
-        .windowResizability(.contentSize)
-        .defaultWindowPlacement { _, context in
-            guard let controls = context.windows.first(where: { $0.id == ScenePresentationStyle.primary2D.rawValue }) else {
-                return WindowPlacement()
-            }
-            return WindowPlacement(.trailing(controls))
-        }
-        .restorationBehavior(.disabled)
         WindowGroup(id: ScenePresentationStyle.sharedVolumetric.rawValue) {
-            if let record = Bridge.volumeWindows[0] { VolumeWindowContent(record: record) }
+            SharedVolumetricRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
+            .overlay{GodotViewControllerRepresentable()}
         }
         .windowStyle(.volumetric)
-        .windowResizability(.contentSize)
-        .defaultWindowPlacement { _, context in Godot2DPlacement.primaryVolumePlacement(in: context) }
         .restorationBehavior(.disabled)
-        Godot2DWindowScenes.windowGroup(.automatic)
-        Godot2DWindowScenes.windowGroup(.utilityPanel)
-        Godot2DWindowScenes.windowGroup(.leading)
-        Godot2DWindowScenes.windowGroup(.trailing)
-        Godot2DWindowScenes.windowGroup(.above)
-        Godot2DWindowScenes.windowGroup(.below)
         WindowGroup(id: ScenePresentationStyle.sharedPortal.rawValue) {
             PortalRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}
-            .modifier(GodotSceneVisibilityBridge())
         }
         .restorationBehavior(.disabled)
         ImmersiveSpace(id: ScenePresentationStyle.immersive.rawValue) {
             ImmersiveRealityView(root: Bridge.root.value, delegate: Bridge.delegate)
             .overlay{GodotViewControllerRepresentable()}
-            .modifier(GodotSceneVisibilityBridge())
         }
         .immersionStyle(selection: Binding(get: {
             switch Bridge.immersionStyle {
@@ -1612,7 +891,6 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
             }
         }, set: { _ in }), in: .mixed, .full, .progressive)
         .restorationBehavior(.disabled)
-
     }
 
     public func scene(
@@ -1622,20 +900,12 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
     ) {
     }
 
-    public func sceneDidBecomeActive(_ scene: UIScene) {
-        Bridge.resumeGodotAudioAfterActivatingSession()
+    public func sceneWillEnterForeground(_ scene: UIScene) {
+        Bridge.sceneVisible = true
     }
 
-    public func sceneDidDisconnect(_ scene: UIScene) {
-        guard Bridge.presentationStyle == .primary2D,
-              Bridge.primary2DScene === scene else { return }
-        Bridge.primary2DScene = nil
-        // Keep the Files and playback controls available while a model volume
-        // is still open, even if visionOS closes the 2D host unexpectedly.
-        let modelRemains = Bridge.volumeWindows.values.contains { $0.scene != nil || $0.opening }
-        if modelRemains {
-            DispatchQueue.main.async { Bridge.reopenPrimary2DWindow() }
-        }
+    public func sceneDidBecomeActive(_ scene: UIScene) {
+        Bridge.resumeGodotAudioAfterActivatingSession()
     }
 
     public func sceneWillResignActive(_ scene: UIScene) {
@@ -1646,6 +916,9 @@ class BridgeScene: NSObject, @MainActor UIHostingSceneDelegate {
         }
     }
 
+    public func sceneDidEnterBackground(_ scene: UIScene) {
+        Bridge.sceneVisible = false
+    }
 }
 
 #else
@@ -1716,170 +989,9 @@ public class Bridge {
     #if !os(macOS)
     @MainActor static var originalScene: UIWindowScene? = nil
     @MainActor static var originalViewController: UIViewController? = nil
-    @MainActor static var primary2DScene: UIWindowScene? = nil
-    @MainActor private static var primary2DReopenPending = false
-    @MainActor static var primary2DPreferredSize: CGSize? = nil
-    @MainActor static var primary2DDefaultSize: CGSize {
-        if let initial = delegate?.getPrimary2DInitialSize(), initial.x > 0, initial.y > 0 {
-            return CGSize(width: CGFloat(initial.x), height: CGFloat(initial.y))
-        }
-        let size = primary2DPreferredSize ?? originalScene?.keyWindow?.bounds.size
-            ?? originalViewController?.viewIfLoaded?.bounds.size
-        if let size, size.width > 0, size.height > 0 { return size }
-        if let sceneSize = UIApplication.shared.connectedScenes
-            .compactMap({ ($0 as? UIWindowScene)?.coordinateSpace.bounds.size })
-            .first(where: { $0.width > 0 && $0.height > 0 }) {
-            return sceneSize
-        }
-        preconditionFailure("GodotRealityKit: no native scene size for the primary 2D window")
-    }
-    @MainActor static var primary2DMinimumSize: CGSize {
-        let requested = delegate?.getPrimary2DMinimumSize()
-        return CGSize(
-            width: requested.flatMap { $0.x > 0 ? CGFloat($0.x) : nil } ?? 0,
-            height: requested.flatMap { $0.y > 0 ? CGFloat($0.y) : nil } ?? 0
-        )
-    }
-    @MainActor private static var primary2DOpener: (token: UUID, action: OpenWindowAction)? = nil
-    @MainActor private static var pendingPrimary2DVolumes: [UInt64: VolumeWindowRecord] = [:]
     @MainActor static var bootSplashImage: UIImage? = nil
     @MainActor static var bootSplashBgColor: UIColor = .black
     @MainActor static var audioInterruptionObserver: Any? = nil
-    #endif
-
-    #if !os(macOS)
-    @MainActor static var volumeWindows: [UInt64: VolumeWindowRecord] = [:]
-    @MainActor private static var operationDriver: GodotViewController?
-
-    @MainActor static func registerPrimary2DOpener(_ action: OpenWindowAction, token: UUID) {
-        primary2DOpener = (token, action)
-        let waiting = pendingPrimary2DVolumes
-        pendingPrimary2DVolumes.removeAll()
-        for record in waiting.values where record.opening && !record.finished && !record.closeRequested {
-            action(id: "gdrk-primary-2d-volume", value: VolumeSessionKey(id: record.id, generation: record.generation))
-            record.watchActivation()
-        }
-    }
-
-    @MainActor static func unregisterPrimary2DOpener(token: UUID) {
-        if primary2DOpener?.token == token { primary2DOpener = nil }
-    }
-
-    @MainActor static func openPrimary2DVolume(_ record: VolumeWindowRecord) {
-        if let action = primary2DOpener?.action {
-            action(id: "gdrk-primary-2d-volume", value: VolumeSessionKey(id: record.id, generation: record.generation))
-            record.watchActivation()
-        } else {
-            pendingPrimary2DVolumes[record.id] = record
-        }
-    }
-
-    @MainActor static func cancelPendingPrimary2DVolume(_ record: VolumeWindowRecord) -> Bool {
-        guard pendingPrimary2DVolumes[record.id] === record else { return false }
-        pendingPrimary2DVolumes.removeValue(forKey: record.id)
-        return true
-    }
-
-    @MainActor static func attachPrimary2DScene(_ scene: UIWindowScene) {
-        guard primary2DScene !== scene else { return }
-        primary2DScene = scene
-        primary2DReopenPending = false
-        // Godot applied its original size restrictions to the splash scene.
-        // Reapply them after the same view controller joins this new scene.
-        DispatchQueue.main.async {
-            guard Self.primary2DScene === scene,
-                  Self.originalViewController?.viewIfLoaded?.window?.windowScene === scene else { return }
-            Self.delegate?.syncPrimary2DWindowGeometry()
-        }
-        guard let old = originalScene, old !== scene else { return }
-        // The same GDTViewController now lives in the SwiftUI controls scene.
-        // Destroy only the original splash scene; destroying its controller
-        // would also remove Godot's native FileDialog host and display link.
-        originalScene = nil
-        UIApplication.shared.requestSceneSessionDestruction(old.session, options: nil) { error in
-            NSLog("GodotRealityKit: unable to dismiss original 2D scene: \(error.localizedDescription)")
-        }
-    }
-
-    @MainActor static func reopenPrimary2DWindow() {
-        guard presentationStyle == .primary2D, primary2DScene == nil, !primary2DReopenPending,
-              let request = UISceneSessionActivationRequest(
-                hostingDelegateClass: BridgeScene.self, id: ScenePresentationStyle.primary2D.rawValue
-              ) else { return }
-        primary2DReopenPending = true
-        UIApplication.shared.activateSceneSession(for: request) { error in
-            primary2DReopenPending = false
-            NSLog("GodotRealityKit: unable to restore controls window: \(error.localizedDescription)")
-        }
-    }
-
-    public static func setVolumeRequestsPending(_ pending: Bool) {
-        MainActor.assumeIsolated {
-            // In primary 2D mode the original Godot view controller already
-            // owns the display link and drives volume lifecycle callbacks.
-            if presentationStyle == .primary2D { return }
-            if pending {
-                if operationDriver == nil { operationDriver = GodotViewController() }
-                operationDriver?.startRendering()
-            } else {
-                operationDriver?.stopRendering()
-                operationDriver = nil
-            }
-        }
-    }
-    public static func isAccessoryTrackingSupported() -> Bool { AccessoryTrackingProvider.isSupported }
-    public static func synchronizeAccessoryTracking() {
-        MainActor.assumeIsolated { SharedAccessoryTracking.shared.synchronize() }
-    }
-    public static func stopAccessoryTracking() { MainActor.assumeIsolated { SharedAccessoryTracking.shared.stop() } }
-    public static func registerVolumeWindow(_ root: Entity, _ delegate: GDRKBridgeDelegate, _ id: UInt64, _ generation: UInt64) {
-        assumeMainActor(root, delegate, id, generation) { root, delegate, id, generation in
-            volumeWindows[id] = VolumeWindowRecord(root: root.value, delegate: delegate, id: id, generation: generation)
-        }
-    }
-    public static func configureVolumeWindow(_ id: UInt64, _ generation: UInt64, _ title: String,
-        _ config: GDRKVolumeConfiguration) {
-        MainActor.assumeIsolated {
-            guard let record = volumeWindows[id], record.generation == generation else { return }
-            record.title = title
-            // Initial size is an opening preference. Never resize a live volume when it changes.
-            if record.scene == nil { record.initial = config.initial_size }
-            if config.resize_mode == 1 {
-                for axis in 0..<3 {
-                    if record.resizeMode != 1 || record.fixedSize[axis] == 0 {
-                        record.fixedSize[axis] = record.scene == nil && config.initial_size[axis] > 0
-                            ? config.initial_size[axis] : config.actual_size[axis]
-                    }
-                    if record.fixedSize[axis] > 0 {
-                        record.fixedSize[axis] = max(record.fixedSize[axis], config.minimum_size[axis])
-                        if config.maximum_size[axis] > 0 {
-                            record.fixedSize[axis] = min(record.fixedSize[axis], config.maximum_size[axis])
-                        }
-                    }
-                }
-            }
-            record.minimum = config.minimum_size; record.maximum = config.maximum_size
-            record.resizeMode = config.resize_mode; record.baseplate = config.baseplate_visibility
-            record.applyGeometry()
-        }
-    }
-    public static func reopenVolumeWindow(_ id: UInt64, _ generation: UInt64) {
-        assumeMainActor(id, generation) { id, generation in
-            guard let record = volumeWindows[id], record.generation == generation else { return }
-            record.open()
-        }
-    }
-    public static func closeVolumeWindow(_ id: UInt64, _ generation: UInt64) {
-        assumeMainActor(id, generation) { id, generation in
-            guard let record = volumeWindows[id], record.generation == generation else { return }
-            record.close()
-        }
-    }
-    public static func forgetVolumeWindow(_ id: UInt64, _ generation: UInt64) {
-        assumeMainActor(id, generation) { id, generation in
-            if volumeWindows[id]?.generation == generation { volumeWindows.removeValue(forKey: id) }
-        }
-    }
     #endif
 
     public init() {}
@@ -1896,18 +1008,9 @@ public class Bridge {
                 case .immersive: return .immersive
                 case .volumetricPortal: return .sharedPortal
                 case .volumetricWindow: return .sharedVolumetric
-                case .flatWindow: return .primary2D
                 @unknown default: return .sharedVolumetric
                 }
             }()
-
-            #if !os(macOS)
-            Godot2DWindowRequests.install()
-            if Self.presentationStyle == .sharedVolumetric {
-                volumeWindows[0] = VolumeWindowRecord(root: Self.root.value, delegate: delegate, id: 0, generation: 0)
-                volumeWindows[0]?.opening = true
-            }
-            #endif
 
             Self.immersionStyle = {
                 switch settings.immersionStyle {
@@ -1921,10 +1024,6 @@ public class Bridge {
 
 #if os(macOS)
         assumeMainActor(self, delegate){ s, delegate in
-            if s.presentationStyle == .primary2D {
-                s.sceneVisible = true
-                return
-            }
             let rkViewHost =
                 NSHostingController(
                     rootView: DesktopRealityView(root: s.root.value,
@@ -1961,16 +1060,8 @@ public class Bridge {
             // deallocated when the UIScene is destroyed
             Self.originalScene = originalScene
             Self.originalViewController = delegate.getDisplayServerViewController()
-            if Self.presentationStyle == .primary2D {
-                Self.primary2DPreferredSize = originalScene.keyWindow?.bounds.size
-            }
             Self.bootSplashImage = delegate.getBootSplashImage()
             Self.bootSplashBgColor = delegate.getBootSplashBgColor()
-
-            // For 2D-first presentation, keep the existing GDTViewController
-            // alive and move it into a SwiftUI window. The controller remains
-            // Godot window ID 0, including its native FileDialog host. A
-            // SwiftUI host gives additional volumes a placement anchor.
 
             // The scene transition below may interrupt the AVAudioSession.
             // Godot's own interruption handler calls on_focus_in() when the
@@ -1995,9 +1086,8 @@ public class Bridge {
                 }
             }
 
-            // Show a splash in the original UIKit scene while opening its
-            // SwiftUI replacement. The original GDTViewController is retained
-            // and used again by Primary2DController in 2D-first presentation.
+            // Set the original godot plain window to a simple view showing just the loading screen
+            // Setting the root view controller here secretly unlinks the display link, stopping the game loop
             originalScene.keyWindow?.rootViewController = LoadingViewController()
 
             NotificationCenter.default.addObserver(
@@ -2020,20 +1110,7 @@ public class Bridge {
     }
 
     public static func isSceneVisible() -> Bool {
-        MainActor.assumeIsolated {
-            #if !os(macOS)
-            if Self.presentationStyle == .primary2D {
-                let primaryVisible = Self.originalScene.map {
-                    $0.activationState != .background && $0.activationState != .unattached
-                } ?? false
-                let hostedVisible = Self.primary2DScene.map {
-                    $0.activationState != .background && $0.activationState != .unattached
-                } ?? false
-                return primaryVisible || hostedVisible || Self.sceneVisible
-            }
-            #endif
-            return Self.sceneVisible
-        }
+        MainActor.assumeIsolated{ Self.sceneVisible }
     }
 
 #if !os(macOS)
@@ -2054,10 +1131,7 @@ public class Bridge {
         }
 
         Self.originalScene = newScene
-        Self.originalViewController = newScene.keyWindow?.rootViewController
-        if Self.presentationStyle != .primary2D {
-            newScene.keyWindow?.rootViewController = LoadingViewController()
-        }
+        newScene.keyWindow?.rootViewController = LoadingViewController()
     }
 
     static func resumeGodotAudioAfterActivatingSession() {

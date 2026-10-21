@@ -12,6 +12,7 @@
 #import "volume_camera_3d.h"
 #import "node_loaders.h"
 #import "scene_tree.h"
+#import "window_hosts.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/viewport.hpp>
@@ -26,6 +27,20 @@ void RealityVolumeCamera3D::_bind_methods() {
 	godot::ClassDB::bind_method(godot::D_METHOD("get_keep_aspect"), &RealityVolumeCamera3D::get_keep_aspect);
 	godot::ClassDB::bind_method(godot::D_METHOD("set_keep_aspect", "keep_aspect"), &RealityVolumeCamera3D::set_keep_aspect);
 	ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "keep_aspect", godot::PROPERTY_HINT_ENUM, "Keep Width,Keep Height,Keep Depth"), "set_keep_aspect", "get_keep_aspect");
+
+	godot::ClassDB::bind_method(godot::D_METHOD("get_window_size"), &RealityVolumeCamera3D::get_window_size);
+	godot::ClassDB::bind_method(godot::D_METHOD("set_window_size", "size"), &RealityVolumeCamera3D::set_window_size);
+	godot::ClassDB::bind_method(godot::D_METHOD("get_window_min_size"), &RealityVolumeCamera3D::get_window_min_size);
+	godot::ClassDB::bind_method(godot::D_METHOD("set_window_min_size", "size"), &RealityVolumeCamera3D::set_window_min_size);
+	godot::ClassDB::bind_method(godot::D_METHOD("get_window_max_size"), &RealityVolumeCamera3D::get_window_max_size);
+	godot::ClassDB::bind_method(godot::D_METHOD("set_window_max_size", "size"), &RealityVolumeCamera3D::set_window_max_size);
+	ADD_GROUP("Window", "window_");
+	ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "window_size", godot::PROPERTY_HINT_NONE, "suffix:m"), "set_window_size", "get_window_size");
+	ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "window_min_size", godot::PROPERTY_HINT_NONE, "suffix:m"), "set_window_min_size", "get_window_min_size");
+	ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "window_max_size", godot::PROPERTY_HINT_NONE, "suffix:m"), "set_window_max_size", "get_window_max_size");
+	ADD_GROUP("", "");
+	godot::ClassDB::bind_method(godot::D_METHOD("get_window_measured_size"), &RealityVolumeCamera3D::get_window_measured_size);
+	ADD_SIGNAL(godot::MethodInfo("window_resized", godot::PropertyInfo(godot::Variant::VECTOR3, "size")));
 
 	godot::ClassDB::bind_method(godot::D_METHOD("get_preview_camera_enabled"), &RealityVolumeCamera3D::get_preview_camera_enabled);
 	godot::ClassDB::bind_method(godot::D_METHOD("set_preview_camera_enabled"), &RealityVolumeCamera3D::set_preview_camera_enabled);
@@ -52,6 +67,15 @@ void RealityVolumeCamera3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(KEEP_WIDTH);
 	BIND_ENUM_CONSTANT(KEEP_HEIGHT);
 	BIND_ENUM_CONSTANT(KEEP_DEPTH);
+}
+
+void RealityVolumeCamera3D::set_window_measured_size(const godot::Vector3 &p_size) {
+	if (p_size.is_equal_approx(window_measured_size)) {
+		return;
+	}
+	window_measured_size = p_size;
+	// Reported during SwiftUI layout; let the game react on its next frame.
+	call_deferred("emit_signal", "window_resized", p_size);
 }
 
 void RealityVolumeCamera3D::set_preview_camera_enabled(bool p_preview_camera_enabled) {
@@ -226,12 +250,9 @@ godot::Vector3 RealityVolumeCamera3D::_get_viewport_size() const {
 	godot::Engine *engine = godot::Engine::get_singleton();
 	godot::MainLoop *main_loop = engine->get_main_loop();
 	RealitySceneTree *scene_tree = godot::Object::cast_to<RealitySceneTree>(main_loop);
-	if (scene_tree && scene_tree->get_loader()) {
-		if (auto *loader = scene_tree->get_loader_for_node(const_cast<RealityVolumeCamera3D *>(this))) {
-			return loader->get_viewport_size();
-		}
-	}
-	{
+	if (SceneLoader *loader = scene_tree ? scene_tree->loader_for(const_cast<RealityVolumeCamera3D *>(this)) : nullptr) {
+		return loader->get_viewport_size();
+	} else {
 		const godot::Vector2 viewport_size = get_viewport()->get_visible_rect().size;
 		return godot::Vector3(viewport_size.x, viewport_size.y, std::min(viewport_size.x, viewport_size.y));
 	}

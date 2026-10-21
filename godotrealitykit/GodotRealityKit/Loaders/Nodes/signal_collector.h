@@ -36,7 +36,7 @@ public:
 };
 
 struct CallableEntry {
-	uint64_t source_id = 0;
+	godot::Node *source;
 	godot::Callable callable;
 };
 
@@ -80,17 +80,8 @@ public:
 	}
 
 	~SignalCollectorBase() {
-		// A volume can retire its loaders while its nodes await queue_free().
-		// Disconnect before releasing the dispatcher, including nodes that outlive it.
-		for (auto &entry : *this) {
-			if (auto *source = godot::ObjectDB::get_instance(entry.source_id)) {
-				if (source->is_connected(signal_name(), entry.callable)) {
-					source->disconnect(signal_name(), entry.callable);
-				}
-			}
-		}
 		if (dispatcher) {
-			godot::memdelete(dispatcher);
+			memfree(dispatcher);
 		}
 	}
 
@@ -124,7 +115,7 @@ public:
 		if constexpr (std::is_base_of<BaseTypeCondition, typename NodeLoader::NodeType>::value) {
 			CallableEntry &entry = (*this)[p_idx];
 			entry.callable = this->dispatcher->base_callable.bind(p_idx);
-			entry.source_id = p_node->get_instance_id();
+			entry.source = p_node;
 			p_node->connect(Base::signal_name(), entry.callable);
 		}
 	}
@@ -132,13 +123,10 @@ public:
 	inline void disconnect(uint32_t p_idx) {
 		if constexpr (std::is_base_of<BaseTypeCondition, typename NodeLoader::NodeType>::value) {
 			CallableEntry &entry = (*this)[p_idx];
-			if (auto *source = godot::ObjectDB::get_instance(entry.source_id)) {
-				if (source->is_connected(Base::signal_name(), entry.callable)) {
-					source->disconnect(Base::signal_name(), entry.callable);
-				}
+			if (entry.source) {
+				entry.source->disconnect(Base::signal_name(), entry.callable);
+				entry.source = nullptr;
 			}
-			entry.source_id = 0;
-			entry.callable = godot::Callable();
 		}
 	}
 

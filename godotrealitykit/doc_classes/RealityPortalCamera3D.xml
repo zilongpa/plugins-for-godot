@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="RealityPortalCamera3D" inherits="Camera3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+		Makes its Window open as a RealityKit portal window on visionOS.
+	</brief_description>
+	<description>
+		In the [b]2D Window[/b] presentation style, a [Window] holding this camera opens as a portal window: a window looking into the [Window]'s own 3D world from this camera, as the [b]Portal Window[/b] presentation style does for the main scene. Enable [member Viewport.own_world_3d] on the [Window], and place it with [member Window.placement].
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="clipping_plane_enabled" type="bool" setter="set_clipping_plane_enabled" getter="is_clipping_plane_enabled" default="false">
+			If [code]true[/code], the portal's content is clipped by a plane at [member clipping_plane_position] facing [member clipping_plane_normal], as with [member RealityPortalMeshInstance3D.clipping_plane_enabled].
+		</member>
+		<member name="clipping_plane_normal" type="Vector3" setter="set_clipping_plane_normal" getter="get_clipping_plane_normal" default="Vector3(0, 0, 1)">
+			Normal of the clipping plane, in the portal window's space: [code]+Z[/code] points toward the person.
+		</member>
+		<member name="clipping_plane_position" type="Vector3" setter="set_clipping_plane_position" getter="get_clipping_plane_position" default="Vector3(0, 0, 0)">
+			Position of the clipping plane, in meters from the center of the portal window.
+		</member>
+		<member name="crossing_plane_enabled" type="bool" setter="set_crossing_plane_enabled" getter="is_crossing_plane_enabled" default="false">
+			If [code]true[/code], objects with a [RealityPortalCrossing3D] can cross a plane at [member crossing_plane_position] facing [member crossing_plane_normal] and appear outside the portal window, as with [member RealityPortalMeshInstance3D.crossing_plane_enabled]. Objects behind this camera appear in front of the window.
+		</member>
+		<member name="crossing_plane_normal" type="Vector3" setter="set_crossing_plane_normal" getter="get_crossing_plane_normal" default="Vector3(0, 0, 1)">
+			Normal of the crossing plane, in the portal window's space: [code]+Z[/code] points toward the person.
+		</member>
+		<member name="crossing_plane_position" type="Vector3" setter="set_crossing_plane_position" getter="get_crossing_plane_position" default="Vector3(0, 0, 0)">
+			Position of the crossing plane, in meters from the center of the portal window.
+		</member>
+		<member name="world_scale" type="float" setter="set_world_scale" getter="get_world_scale" default="0.0">
+			Meters of the portal per world unit. If [code]0[/code], the portal window shows a slider to choose the scale.
+		</member>
+	</members>
+</class>
