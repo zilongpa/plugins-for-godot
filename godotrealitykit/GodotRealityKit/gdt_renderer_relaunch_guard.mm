@@ -16,35 +16,22 @@ static NSString *const kGDRKRendererRelaunchDetectedNotification = @"GDRKRendere
 
 namespace {
 
-void notify_renderer_relaunch() {
-	dispatch_async(dispatch_get_main_queue(), ^{
-		[[NSNotificationCenter defaultCenter]
-			postNotificationName:kGDRKRendererRelaunchDetectedNotification object:nil];
-	});
-}
-
-void swizzle_project_data_as_relaunch(Class cls) {
-	SEL selector = @selector(setUpProjectDataShowingBootLogo:);
+void swizzle_boot_logo_as_relaunch(Class cls, SEL selector) {
 	Method method = class_getInstanceMethod(cls, selector);
-	if (method) {
-		IMP guarded_imp = imp_implementationWithBlock(^(id self, BOOL p_show_boot_logo) {
-			notify_renderer_relaunch();
-		});
-		method_setImplementation(method, guarded_imp);
+	if (!method) {
+		NSLog(@"GodotRealityKit: cannot install relaunch guard, missing -[%@ %@]",
+				NSStringFromClass(cls), NSStringFromSelector(selector));
 		return;
 	}
 
-	selector = @selector(setUpProjectData);
-	method = class_getInstanceMethod(cls, selector);
-	if (method) {
-		IMP guarded_imp = imp_implementationWithBlock(^(id self) {
-			notify_renderer_relaunch();
+	IMP guarded_imp = imp_implementationWithBlock(^(id self, BOOL p_show_boot_logo) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[[NSNotificationCenter defaultCenter]
+					postNotificationName:kGDRKRendererRelaunchDetectedNotification
+								  object:nil];
 		});
-		method_setImplementation(method, guarded_imp);
-		return;
-	}
-	NSLog(@"GodotRealityKit: cannot install relaunch guard; no project-data setup method on %@",
-			NSStringFromClass(cls));
+	});
+	method_setImplementation(method, guarded_imp);
 }
 
 void swizzle_one_shot_void(Class cls, SEL selector, dispatch_once_t *guard) {
@@ -76,7 +63,7 @@ void install_renderer_relaunch_guard() {
 			return;
 		}
 
-		swizzle_project_data_as_relaunch(renderer_cls);
+		swizzle_boot_logo_as_relaunch(renderer_cls, @selector(setUpProjectDataShowingBootLogo:));
 
 		static dispatch_once_t start_guard;
 		swizzle_one_shot_void(renderer_cls, @selector(startMain), &start_guard);

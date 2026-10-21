@@ -39,6 +39,19 @@ public:
 	KeepAspect get_keep_aspect() const { return keep_aspect; }
 	void set_keep_aspect(KeepAspect p_keep_aspect) { keep_aspect = p_keep_aspect; }
 
+	// The physical size of the volume, in meters, when its Window opens as a
+	// volume. Zero components of the minimum and maximum leave them unbounded.
+	godot::Vector3 get_window_size() const { return window_size; }
+	void set_window_size(const godot::Vector3 &p_size) { window_size = p_size; }
+	godot::Vector3 get_window_min_size() const { return window_min_size; }
+	void set_window_min_size(const godot::Vector3 &p_size) { window_min_size = p_size; }
+	godot::Vector3 get_window_max_size() const { return window_max_size; }
+	void set_window_max_size(const godot::Vector3 &p_size) { window_max_size = p_size; }
+
+	// The size the volume has in the person's space, in meters, while open.
+	godot::Vector3 get_window_measured_size() const { return window_measured_size; }
+	void set_window_measured_size(const godot::Vector3 &p_size);
+
 	bool get_preview_camera_enabled() const { return preview_camera_enabled; }
 	void set_preview_camera_enabled(bool p_preview_camera_enabled);
 
@@ -75,6 +88,10 @@ private:
 
 	float size = 5.0;
 	KeepAspect keep_aspect = KEEP_DEPTH;
+	godot::Vector3 window_size = godot::Vector3(1.0, 1.0, 1.0);
+	godot::Vector3 window_min_size;
+	godot::Vector3 window_max_size;
+	godot::Vector3 window_measured_size;
 	godot::Camera3D *generated_camera = nullptr;
 	bool preview_camera_enabled = true;
 };

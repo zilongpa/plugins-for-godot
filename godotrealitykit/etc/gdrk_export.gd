@@ -33,13 +33,10 @@ func _get_export_options_overrides(platform: EditorExportPlatform) -> Dictionary
 	if platform is not EditorExportPlatformVisionOS:
 		return {}
 	else:
-		var preset := get_export_preset()
-		var overrides := {}
-		for configuration in ["debug", "release"]:
-			var option: String = "custom_template/" + configuration
-			if preset == null or String(preset.get(option)).is_empty():
-				overrides[option] = "./addons/GodotRealityKit/visionos.template_%s/godot_visionos.zip" % configuration
-		return overrides
+		return {
+			"custom_template/debug": "./addons/GodotRealityKit/visionos.template_debug/godot_visionos.zip",
+			"custom_template/release": "./addons/GodotRealityKit/visionos.template_release/godot_visionos.zip"
+		}
 
 func _export_begin(features: PackedStringArray, is_debug: bool, path: String, flags: int) -> void:
 	_pending_visionos_path = path if features.has("visionos") else ""
@@ -94,14 +91,6 @@ func _export_end() -> void:
 			"NSAccessoryTrackingUsageDescription",
 			"Used to track spatial controllers for interacting with content."
 		)
-	if controller_tracking_enabled and not contents.contains("<string>SpatialGamepad</string>"):
-		var profile := "<dict><key>ProfileName</key><string>SpatialGamepad</string></dict>"
-		if contents.contains("<key>GCSupportedGameControllers</key>"):
-			var supported := RegEx.new()
-			supported.compile("(<key>GCSupportedGameControllers</key>\\s*<array>)")
-			contents = supported.sub(contents, "$1" + profile)
-		else:
-			contents = contents.replace(closing_marker, "<key>GCSupportedGameControllers</key><array>" + profile + "</array>\n" + closing_marker)
 
 	var w := FileAccess.open(plist_path, FileAccess.WRITE)
 	if w == null:

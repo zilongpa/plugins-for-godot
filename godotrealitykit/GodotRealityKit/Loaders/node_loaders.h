@@ -58,7 +58,6 @@ protected:
 
 public:
 	NodeLoaders();
-	godot::Node *window_scene_root = nullptr;
 
 	template <typename T>
 	T &get() { return std::get<T>(loaders); }

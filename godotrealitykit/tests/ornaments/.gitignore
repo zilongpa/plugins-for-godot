@@ -1,4 +1,0 @@
-.godot/
-addons/
-builds/*
-!builds/.gdignore

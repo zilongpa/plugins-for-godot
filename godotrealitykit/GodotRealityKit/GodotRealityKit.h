@@ -26,8 +26,6 @@
 
 #include <array>
 #include <functional>
-#include <memory>
-#include <swift/bridging>
 
 namespace gdrk {
 
@@ -65,9 +63,24 @@ struct GDRKTransform {
 	static GDRKTransform identity;
 };
 
-struct GDRKVolumeConfiguration {
-	simd_float3 initial_size, minimum_size, maximum_size, actual_size;
-	int32_t resize_mode, baseplate_visibility;
+// The physical size of a volume, in meters. Zero components of the minimum
+// and maximum leave them unbounded.
+struct GDRKVolumeSize {
+	simd_float3 size;
+	simd_float3 minimum;
+	simd_float3 maximum;
+	bool resizable;
+};
+
+// A portal window's clipping and crossing planes, in the window's space
+// (meters from its center, +Z toward the person).
+struct GDRKPortalPlanes {
+	bool clipping;
+	simd_float3 clipping_position;
+	simd_float3 clipping_normal;
+	bool crossing;
+	simd_float3 crossing_position;
+	simd_float3 crossing_normal;
 };
 
 struct GDRKRay {
@@ -86,7 +99,9 @@ typedef NS_ENUM(NSUInteger, PresentationStyle) {
 	kVolumetricWindow,
 	kVolumetricPortal,
 	kImmersive,
-	kFlatWindow
+	// The main viewport stays a 2D window; Window nodes holding a
+	// RealityVolumeCamera3D or RealityPortalCamera3D open as volumes or portals.
+	kWindow2D
 };
 
 typedef NS_ENUM(NSUInteger, ImmersionStyle) {
@@ -114,28 +129,18 @@ using GDRKColor = UIColor;
 
 using GDRKColorRef = GDRKColor *;
 
-struct GDRKBridgeLifetime {
-	gdrk::SceneLoader *loader = nullptr;
-	uint64_t generation = 0;
-};
-
 class GDRKBridgeDelegate {
 public:
-	explicit GDRKBridgeDelegate(gdrk::SceneLoader *p_loader);
-	bool isValid() const;
-	void onVolumeWindowEvent(int p_event, const char *p_error) const;
-	void onVolumeSizeChanged(simd_float3 p_meters) const;
-	void cancelSpatialPress(int64_t p_id) const;
-	void on2DWindowFailed(uint64_t p_id, const char *p_error) const;
-	void on2DWindowClosed(uint64_t p_id) const;
-	// Runtime state for Godot UI that needs to know when a native 2D scene exists.
-	void set2DWindowNativeOpen(uint64_t p_id, bool p_open) const;
-	// Initial placement for a native Godot Window on visionOS. A Window metadata
-	// override takes precedence over the project's default placement setting.
-	int32_t get2DWindowPlacement(uint64_t p_id) const;
-	// -1: ordinary window; -2: invalid ornament configuration.
-	int64_t get2DWindowOrnamentVolume(uint64_t p_id) const;
-	simd_float2 get2DWindowSizePoints(uint64_t p_id) const;
+	explicit GDRKBridgeDelegate(gdrk::SceneLoader *p_loader) {
+		loader = p_loader;
+	}
+
+	// A delegate for the volume or portal presenting a Window. SwiftUI can still
+	// update the window's views after it closes; its loader is looked up each time.
+	GDRKBridgeDelegate(gdrk::SceneLoader *p_loader, uint64_t p_window_id) {
+		loader = p_loader;
+		window_id = p_window_id;
+	}
 
 	void printError(const char *p_msg);
 	void printWarning(const char *p_msg);
@@ -158,21 +163,21 @@ public:
 	NSWindow *getDisplayServerWindow() const;
 #else
 	UIViewController *getDisplayServerViewController() const;
-	// Initial native window size in visionOS points. Window size overrides
-	// take precedence over the logical viewport size, as they do in Godot.
-	simd_float2 getPrimary2DInitialSize() const;
-	// Godot's root-window minimum, converted from pixels to visionOS points.
-	simd_float2 getPrimary2DMinimumSize() const;
-	// Reapply the root window's current min/max and resize restrictions after
-	// moving Godot's view controller into the SwiftUI window scene.
-	void syncPrimary2DWindowGeometry() const;
 	UIImage *getBootSplashImage() const;
 	UIColor *getBootSplashBgColor() const;
 #endif
 
-	void *getCameraEntity() const SWIFT_RETURNS_INDEPENDENT_VALUE;
+	void *getCameraEntity() const;
 
 	void onWorldScaleChanged(float p_scale) const;
+
+	// The fixed world scale of this scene's portal, or 0 for the interactive slider.
+	float getPortalWorldScale() const;
+	// The clipping and crossing planes of this scene's portal; both off by default.
+	GDRKPortalPlanes getPortalPlanes() const;
+
+	// The measured size of this scene's volume window, in meters.
+	void onVolumeMeasured(simd_float3 p_size_meters) const;
 
 #if TARGET_OS_OSX
 	void onWindowResized(simd_float2 p_new_size) const;
@@ -195,10 +200,7 @@ public:
 	// Sample a spatial controller's buttons / thumbstick and publish them on the shared-volume
 	// controller XR interface. p_gc_controller is the GCController as an opaque pointer. Ignored
 	// when that interface isn't running.
-	void setControllerInput(ControllerHand p_hand, void *p_gc_controller, uint32_t p_locations) const;
-	bool controllerTrackingEnabled() const;
-	void setControllerTrackingState(bool p_running, const char *p_error) const;
-	void setControllerPose(ControllerHand p_hand, int p_pose, GDRKTransform p_transform, simd_float3 p_velocity, simd_float3 p_angular, int p_confidence, bool p_supported) const;
+	void setControllerInput(ControllerHand p_hand, void *p_gc_controller) const;
 
 	void onEntityPressUpdate(int64_t p_event_id,
 			bool p_ended,
@@ -215,9 +217,11 @@ public:
 			uint32_t p_chirality) const;
 
 private:
-	std::shared_ptr<GDRKBridgeLifetime> lifetime;
-	uint64_t generation = 0;
-	gdrk::SceneLoader *get_loader() const;
+	mutable gdrk::SceneLoader *loader = nullptr;
+	uint64_t window_id = 0;
+
+	// The live loader, or null once the window it presented has closed.
+	gdrk::SceneLoader *resolve_loader() const;
 
 	void initialize_phase_manager() const;
 };

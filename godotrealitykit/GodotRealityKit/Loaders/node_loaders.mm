@@ -9,21 +9,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#import "node_loaders.h"
 
+#import "node_loaders.h"
 #include "Nodes/hierarchical_effect.h"
 #include "resource_loaders.h"
-#import "scene_tree.h"
 #import "signposts.h"
 
+#include <cstdio>
 #include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/skeleton3d.hpp>
 #include <godot_cpp/classes/text_server_manager.hpp>
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/engine_ptrcall.hpp>
-
-#include <cstdio>
 
 namespace gdrk {
 
@@ -50,12 +48,6 @@ NodeLoaders::NodeLoaders() :
 }
 
 void NodeLoaders::node_added(godot::Node *p_node) {
-	if (auto *tree = godot::Object::cast_to<RealitySceneTree>(get_scene_tree())) {
-		auto *owner = tree->get_loader_for_node(p_node);
-		if (!owner || owner->get_nodes() != this) {
-			return;
-		}
-	}
 	const uint64_t node_id = p_node->get_instance_id();
 	node_id_to_topo_priority.insert(node_id, next_topo_priority++);
 
@@ -82,7 +74,6 @@ void NodeLoaders::node_added(godot::Node *p_node) {
 
 void NodeLoaders::node_removed(godot::Node *p_node) {
 	const uint64_t node_id = p_node->get_instance_id();
-	if (!node_id_to_topo_priority.has(node_id)) { return; }
 	node_id_to_topo_priority.erase(node_id);
 
 	if (p_node->has_meta("_gdrk_skip") && p_node->get_meta("_gdrk_skip")) {

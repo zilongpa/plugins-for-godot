@@ -21,14 +21,7 @@ GODOT_CPP_BRANCH=<godot-cpp commit or branch>
 SHARED_WORKSPACE=../../shared_workspace
 ```
 
-Running `scons` with no arguments builds everything: dependencies (if needed),
-the macOS editor, visionOS device and visionOS Simulator frameworks,
-documentation, and an addon containing both visionOS slices.
-
-`SHARED_WORKSPACE` reuses prebuilt dependencies and does not check out the
-commits in `deps.conf`. Before validating or packaging a build from a shared
-workspace, compare both dependency HEADs to the configured commits. A
-framework that compiles against other commits is not an exact-pin build.
+Running `scons` with no arguments builds everything: builds dependencies (if not already present), builds the macOS editor framework and visionOS template framework, assembles the addon, and generates documentation.
 
 ```sh
 scons
@@ -48,7 +41,7 @@ scons config=release
 |---|---|
 | `scons deps` | Clone and build Godot + godot-cpp only |
 | `scons framework platform=macos` | Build macOS framework only |
-| `scons framework platform=visionos` | Build visionOS device framework only |
+| `scons framework platform=visionos` | Build visionOS framework only |
 | `scons framework platform=visionos simulator=yes` | Build visionOS Simulator framework only |
 | `scons addon` | Assemble addon for distribution |
 | `scons docs` | Regenerate `doc_data.gen.cpp` from `doc_classes/*.xml` and rebuild the frameworks to embed the updated docs |
@@ -61,8 +54,6 @@ addons/GodotRealityKit/
     plugin.cfg
     gdrk.gd
     gdrk_export.gd
-    reality_ornament.gd
-    Ornaments.md
     volume_camera_gizmo/
     directional_light_shadow_gizmo/
     macos.editor/                # or macos.template_release with config=release
@@ -70,16 +61,19 @@ addons/GodotRealityKit/
         godot_macos.zip
     macos.template_debug -> macos.editor
     visionos.template_debug/     # or visionos.template_release with config=release
-        GodotRealityKit.xcframework/  # device and Simulator slices
+        GodotRealityKit.xcframework   # device and Simulator slices
         godot_visionos.zip
 ```
 
-The dependency build applies the required embedded-window engine patch for
-[volume ornaments](Ornaments.md). Shared prebuilt workspaces must already
-contain the patched engine and rebuilt templates.
+## Pinned dependencies
 
-## Experimental visionOS Simulator builds
+When `GODOT_BRANCH` or `GODOT_CPP_BRANCH` is a full commit hash, `scons` checks
+out exactly that commit and rebuilds the dependencies after `deps.conf` changes.
+A dependency checkout with local changes stops the build instead of being built
+silently. A `SHARED_WORKSPACE` must already be at the configured commits.
 
-See [Simulator](Simulator.md) for Debug arm64 validation and tested limitations.
-The default addon includes both device and Simulator framework slices; use its
-matching Godot editor and export template when exporting an Xcode project.
+## visionOS Simulator
+
+Dependencies and the addon include visionOS Simulator slices, so an exported
+Xcode project also runs on an Apple Vision Pro Simulator. This requires a Godot
+fork whose visionOS platform supports `simulator=yes`.

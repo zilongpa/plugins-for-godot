@@ -16,6 +16,7 @@
 #include "volume_camera_3d.h"
 
 #include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/viewport.hpp>
 #include <optional>
 
 namespace gdrk {
@@ -62,6 +63,9 @@ public:
 
 	void update(const ResourceLoaderSet &p_resource_loaders);
 
+	// The viewport whose current camera this loader follows.
+	void set_viewport(godot::Viewport *p_viewport) { viewport_id = p_viewport ? p_viewport->get_instance_id() : 0; }
+
 	GodotRealityKit::Entity get_current_entity() const { return camera_entity; }
 	godot::Node3D *get_current_node() const;
 	const CullingInfo &get_culling_info() const { return culling_info; }
@@ -70,6 +74,7 @@ public:
 private:
 	friend class RealityVolumeCamera3D;
 
+	uint64_t viewport_id = 0;
 	GodotRealityKit::Entity camera_entity = GodotRealityKit::Entity::initAndMaterialize();
 	godot::Transform3D camera_transform;
 	uint32_t camera_properties_hash = 0;

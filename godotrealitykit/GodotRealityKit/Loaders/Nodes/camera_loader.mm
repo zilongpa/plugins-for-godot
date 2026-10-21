@@ -37,16 +37,12 @@ auto get_volume_camera_3d_prop_hasher() {
 }
 
 godot::Node3D *CameraLoader::get_current_node() const {
-	godot::Engine *engine = godot::Engine::get_singleton();
-	RealitySceneTree *reality_scene_tree = godot::Object::cast_to<RealitySceneTree>(engine->get_main_loop());
-	ERR_FAIL_NULL_V(reality_scene_tree, nullptr);
-
-	godot::Viewport *viewport = Base::owner->window_scene_root
-			? Base::owner->window_scene_root->get_viewport() : reality_scene_tree->get_root()->get_viewport();
-	// An additional volume's scene exists before its viewport enters the tree.
-	// A nested frame callback during that interval must not dereference it.
+	godot::Viewport *viewport = godot::Object::cast_to<godot::Viewport>(godot::ObjectDB::get_instance(viewport_id));
 	if (!viewport) {
-		return nullptr;
+		godot::Engine *engine = godot::Engine::get_singleton();
+		RealitySceneTree *reality_scene_tree = godot::Object::cast_to<RealitySceneTree>(engine->get_main_loop());
+		ERR_FAIL_NULL_V(reality_scene_tree, nullptr);
+		viewport = reality_scene_tree->get_root()->get_viewport();
 	}
 	if (godot::Camera3D *camera_3d = viewport->get_camera_3d()) {
 #if TARGET_OS_XR

@@ -58,7 +58,6 @@ public:
 	uint32_t create_broken_program_async();
 
 private:
-	std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 	struct Program {
 		GodotRealityKit::SGLProgram value = GodotRealityKit::SGLProgram::init();
 	};
