@@ -34,6 +34,10 @@ class ProgramCache;
 
 } //namespace gdrk
 
+namespace godot {
+class XROrigin3D;
+} //namespace godot
+
 struct GDRKVertexBufferFormat {
 	uint32_t vertex_stride;
 	uint32_t normal_tangent_stride;
@@ -190,8 +194,9 @@ public:
 	// True while the shared-volume controller XR interface is running, i.e. the presentation
 	// style is a shared volume and controller tracking is enabled. Only then is it worth
 	// anchoring the controllers, since nothing else consumes their poses.
-	// For a volume or portal Window, also only while the Window contains the current XROrigin3D,
-	// so that a single window owns the controllers and poses are in that window's world.
+	// For a volume or portal Window, also only while the Window holds an XROrigin3D. Its poses go
+	// to the Window's own trackers, and also to the standard ones while it holds the current
+	// XROrigin3D (see RealityControllerXRInterface).
 	bool wantsControllerAnchors() const;
 
 	// Push a spatial controller's AnchorEntity(.accessory) transform, in scene-root-local
@@ -227,6 +232,8 @@ private:
 
 	// The live loader, or null once the window it presented has closed.
 	gdrk::SceneLoader *resolve_loader() const;
+	// The XROrigin3D this Window's controllers are tracked in, or null.
+	godot::XROrigin3D *xrOrigin() const;
 
 	void initialize_phase_manager() const;
 };

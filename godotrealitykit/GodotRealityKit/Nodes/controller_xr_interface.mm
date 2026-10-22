@@ -92,6 +92,14 @@ void RealityControllerXRInterface::_uninitialize() {
 	}
 
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
+	for (auto &[window_id, hands] : windows) {
+		for (Controller *controller : { &hands.first, &hands.second }) {
+			if (xr_server != nullptr && controller->tracker.is_valid()) {
+				xr_server->remove_tracker(controller->tracker);
+			}
+		}
+	}
+	windows.clear();
 	for (Controller *controller : { &left, &right }) {
 		if (xr_server != nullptr && controller->tracker.is_valid()) {
 			xr_server->remove_tracker(controller->tracker);
@@ -135,9 +143,81 @@ void RealityControllerXRInterface::set_anchor_pose(godot::XRPositionalTracker::T
 void RealityControllerXRInterface::set_aim_pose(godot::XRPositionalTracker::TrackerHand p_hand,
 		const godot::Transform3D &p_pose,
 		bool p_tracked) {
-	Controller &controller = (p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT) ? left : right;
+	set_aim_pose(0, p_hand, p_pose, p_tracked);
+}
+
+godot::StringName RealityControllerXRInterface::tracker_name(godot::XRPositionalTracker::TrackerHand p_hand, uint64_t p_window_id) {
+	const godot::String hand = p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT ? "left_hand" : "right_hand";
+	return p_window_id ? godot::StringName(hand + godot::String("_") + godot::String::num_uint64(p_window_id)) : godot::StringName(hand);
+}
+
+godot::Ref<godot::XRControllerTracker> RealityControllerXRInterface::make_tracker(godot::XRPositionalTracker::TrackerHand p_hand, uint64_t p_window_id) {
+	godot::Ref<godot::XRControllerTracker> tracker;
+	tracker.instantiate();
+	tracker->set_tracker_hand(p_hand);
+	tracker->set_tracker_name(tracker_name(p_hand, p_window_id));
+	tracker->set_tracker_desc(p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT
+					? "Spatial controller held in the left hand, in one Window's space"
+					: "Spatial controller held in the right hand, in one Window's space");
+	if (godot::XRServer *xr_server = godot::XRServer::get_singleton()) {
+		xr_server->add_tracker(tracker);
+	}
+	return tracker;
+}
+
+RealityControllerXRInterface::Controller &RealityControllerXRInterface::controller_for(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand) {
+	const bool is_left = p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT;
+	if (!p_window_id) {
+		return is_left ? left : right;
+	}
+	auto found = windows.find(p_window_id);
+	if (found == windows.end()) {
+		found = windows.emplace(p_window_id, std::pair<Controller, Controller>()).first;
+		found->second.first.tracker = make_tracker(godot::XRPositionalTracker::TRACKER_HAND_LEFT, p_window_id);
+		found->second.second.tracker = make_tracker(godot::XRPositionalTracker::TRACKER_HAND_RIGHT, p_window_id);
+	}
+	return is_left ? found->second.first : found->second.second;
+}
+
+void RealityControllerXRInterface::set_anchor_pose(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const godot::Transform3D &p_pose, bool p_tracked) {
+	Controller &controller = controller_for(p_window_id, p_hand);
+	controller.pose = p_pose;
+	controller.tracked = p_tracked;
+}
+
+void RealityControllerXRInterface::set_aim_pose(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const godot::Transform3D &p_pose, bool p_tracked) {
+	Controller &controller = controller_for(p_window_id, p_hand);
 	controller.aim.transform = p_pose;
 	controller.aim.tracked = p_tracked;
+}
+
+void RealityControllerXRInterface::set_controller_input(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const ControllerInput &p_input, void *p_gc_controller) {
+	if (!p_window_id) {
+		set_controller_input(p_hand, p_input, p_gc_controller);
+		return;
+	}
+	Controller &controller = controller_for(p_window_id, p_hand);
+	controller.input = p_input;
+	controller.has_input = true;
+	// Haptics go through the standard controller of the hand, whichever Window's tracker
+	// they name.
+	Controller &haptics = (p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT) ? left : right;
+	if (haptics.gc_controller != p_gc_controller) {
+		release_haptic_engine(haptics);
+		haptics.gc_controller = p_gc_controller;
+	}
+}
+
+void RealityControllerXRInterface::forget_window(uint64_t p_window_id) {
+	auto found = windows.find(p_window_id);
+	if (found == windows.end()) {
+		return;
+	}
+	if (godot::XRServer *xr_server = godot::XRServer::get_singleton()) {
+		xr_server->remove_tracker(found->second.first.tracker);
+		xr_server->remove_tracker(found->second.second.tracker);
+	}
+	windows.erase(found);
 }
 
 void RealityControllerXRInterface::set_controller_input(godot::XRPositionalTracker::TrackerHand p_hand,
@@ -156,6 +236,10 @@ void RealityControllerXRInterface::set_controller_input(godot::XRPositionalTrack
 void RealityControllerXRInterface::_process() {
 	publish(left);
 	publish(right);
+	for (auto &[window_id, hands] : windows) {
+		publish(hands.first);
+		publish(hands.second);
+	}
 }
 
 void RealityControllerXRInterface::publish(Controller &p_controller) {
@@ -204,12 +288,11 @@ void RealityControllerXRInterface::publish_pose(const godot::Ref<godot::XRContro
 }
 
 RealityControllerXRInterface::Controller *RealityControllerXRInterface::controller_for_tracker(const godot::StringName &p_tracker_name) {
-	static const godot::StringName right_hand("right_hand");
-	static const godot::StringName left_hand("left_hand");
-	if (p_tracker_name == left_hand) {
+	const godot::String name = p_tracker_name;
+	if (name == "left_hand" || name.begins_with("left_hand_")) {
 		return &left;
 	}
-	if (p_tracker_name == right_hand) {
+	if (name == "right_hand" || name.begins_with("right_hand_")) {
 		return &right;
 	}
 	return nullptr;

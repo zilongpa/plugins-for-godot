@@ -574,45 +574,50 @@ GDRKTransform GDRKBridgeDelegate::getXROrigin() const {
 	};
 }
 
-static bool contains_current_xr_origin(godot::Node *p_node) {
+// The XROrigin3D a Window's controllers are tracked in: the current one if the Window holds
+// it, else the Window's first. Null when the Window holds none.
+static godot::XROrigin3D *find_xr_origin(godot::Node *p_node) {
 	if (p_node == nullptr) {
-		return false;
+		return nullptr;
 	}
 	godot::TypedArray<godot::Node> origins = p_node->find_children("*", "XROrigin3D", true, false);
+	godot::XROrigin3D *first = nullptr;
 	for (int64_t i = 0; i < origins.size(); i++) {
 		godot::XROrigin3D *origin = godot::Object::cast_to<godot::XROrigin3D>(origins[i]);
 		if (origin && origin->is_current()) {
-			return true;
+			return origin;
+		}
+		if (!first) {
+			first = origin;
 		}
 	}
-	return false;
+	return first;
+}
+
+godot::XROrigin3D *GDRKBridgeDelegate::xrOrigin() const {
+	gdrk::SceneLoader *loader = window_id ? resolve_loader() : nullptr;
+	return loader ? find_xr_origin(loader->get_root_node()) : nullptr;
 }
 
 bool GDRKBridgeDelegate::wantsControllerAnchors() const {
 	if (gdrk::RealityControllerXRInterface::get_active() == nullptr) {
 		return false;
 	}
-	if (!window_id) {
-		return true;
-	}
-	gdrk::SceneLoader *loader = resolve_loader();
-	return loader && contains_current_xr_origin(loader->get_root_node());
+	return !window_id || xrOrigin() != nullptr;
 }
 
-// Converts a scene-root-local transform to the space of the current XROrigin3D, which is what
-// XRController3D expects of a tracker pose (it applies the world scale back).
-static godot::Transform3D to_tracker_pose(GDRKTransform p_transform) {
+// Converts a scene-root-local transform to the space of an XROrigin3D with the given global
+// transform, which is what XRController3D expects of a tracker pose (it applies the world
+// scale back).
+static godot::Transform3D to_tracker_pose(GDRKTransform p_transform, const godot::Transform3D &p_origin) {
 	godot::Transform3D pose;
 	pose.basis.set_quaternion(convert(p_transform.orientation));
 	pose.basis.scale(convert(p_transform.scale));
 	pose.origin = convert(p_transform.position);
 
+	pose = p_origin.affine_inverse() * pose;
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
-	if (xr_server == nullptr) {
-		return pose;
-	}
-	pose = xr_server->get_world_origin().affine_inverse() * pose;
-	const double world_scale = xr_server->get_world_scale();
+	const double world_scale = xr_server ? xr_server->get_world_scale() : 1.0;
 	if (world_scale > 0.0) {
 		pose.origin /= world_scale;
 	}
@@ -625,12 +630,32 @@ static godot::XRPositionalTracker::TrackerHand tracker_hand(ControllerHand p_han
 			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
 }
 
+// Calls p_publish with each tracker set a pose of this delegate's view goes to, and the pose
+// in that set's space: the Window's own trackers, and the standard ones when the Window holds
+// the current XROrigin3D or this is the main scene.
+template <typename F>
+static void for_each_tracker_set(uint64_t p_window_id, godot::XROrigin3D *p_origin, GDRKTransform p_transform, F p_publish) {
+	if (p_window_id) {
+		if (!p_origin) {
+			return;
+		}
+		p_publish(p_window_id, to_tracker_pose(p_transform, p_origin->get_global_transform()));
+		if (!p_origin->is_current()) {
+			return;
+		}
+	}
+	godot::XRServer *xr_server = godot::XRServer::get_singleton();
+	p_publish(0, to_tracker_pose(p_transform, xr_server ? xr_server->get_world_origin() : godot::Transform3D()));
+}
+
 void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
 	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
 	if (controller_interface == nullptr) {
 		return;
 	}
-	controller_interface->set_anchor_pose(tracker_hand(p_hand), to_tracker_pose(p_transform), p_tracked);
+	for_each_tracker_set(window_id, xrOrigin(), p_transform, [&](uint64_t p_set, const godot::Transform3D &p_pose) {
+		controller_interface->set_anchor_pose(p_set, tracker_hand(p_hand), p_pose, p_tracked);
+	});
 }
 
 void GDRKBridgeDelegate::setControllerAim(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
@@ -638,7 +663,9 @@ void GDRKBridgeDelegate::setControllerAim(ControllerHand p_hand, GDRKTransform p
 	if (controller_interface == nullptr) {
 		return;
 	}
-	controller_interface->set_aim_pose(tracker_hand(p_hand), to_tracker_pose(p_transform), p_tracked);
+	for_each_tracker_set(window_id, xrOrigin(), p_transform, [&](uint64_t p_set, const godot::Transform3D &p_pose) {
+		controller_interface->set_aim_pose(p_set, tracker_hand(p_hand), p_pose, p_tracked);
+	});
 }
 
 void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {
@@ -679,7 +706,13 @@ void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_co
 	const godot::XRPositionalTracker::TrackerHand hand = p_hand == kLeftHand
 			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
 			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
-	controller_interface->set_controller_input(hand, in, p_gc_controller);
+	godot::XROrigin3D *origin = xrOrigin();
+	if (window_id && origin) {
+		controller_interface->set_controller_input(window_id, hand, in, p_gc_controller);
+	}
+	if (!window_id || (origin && origin->is_current())) {
+		controller_interface->set_controller_input(0, hand, in, p_gc_controller);
+	}
 }
 
 void log_version() {
