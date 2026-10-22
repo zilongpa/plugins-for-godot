@@ -14,6 +14,7 @@
 @preconcurrency import GameController
 import RealityKit
 import SwiftUI
+import UIKit
 
 /// Anchors the spatial controllers in one RealityView and pushes their poses and input to the
 /// engine's accessory controller interface. A volume or portal holds one; it only anchors while
@@ -33,6 +34,13 @@ final class AccessoryAnchors {
     private var session: SpatialTrackingSession? = nil
 
     private var started = false
+    nonisolated(unsafe) private var sceneObserver: NSObjectProtocol? = nil
+    // Seconds an installed anchor may stay untracked before it is rebuilt.
+    private static let reanchorDelay: TimeInterval = 2
+    // When each hand's grip anchor stopped tracking, or was last rebuilt while still untracked.
+    private var lostSince: [ControllerHand: TimeInterval] = [:]
+    // Hands whose controller is queued again for a fresh anchor.
+    private var reanchoring: Set<ControllerHand> = []
     // TEMP: device instrumentation for controllers freezing after the launcher closes.
     private var lastLog: TimeInterval = 0
     private let logID = Int.random(in: 100...999)
@@ -47,6 +55,9 @@ final class AccessoryAnchors {
 
     deinit {
         if let observer = connectObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = sceneObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -89,6 +100,7 @@ final class AccessoryAnchors {
         guard let delegate, wants else { return }
 
         startIfNeeded()
+        reanchorLostControllers()
         resolvePendingControllers()
         install()
 
@@ -126,6 +138,22 @@ final class AccessoryAnchors {
             self.session = session
         }
 
+        // Closing one of the app's scenes, such as the main window, can leave accessory anchors
+        // untracked until a controller connects again, so anchor them afresh.
+        sceneObserver = NotificationCenter.default.addObserver(
+            forName: UIScene.didDisconnectNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                NSLog("[GDRK] accessory anchor: a scene disconnected; re-anchoring")
+                for hand in self.controllers.keys {
+                    self.reanchor(hand)
+                }
+            }
+        }
+
         connectObserver = NotificationCenter.default.addObserver(
             forName: NSNotification.Name.GCControllerDidConnect,
             object: nil,
@@ -154,6 +182,36 @@ final class AccessoryAnchors {
         NSLog("[GDRK] controller '\(controller.vendorName ?? "?")' category=\(controller.productCategory) extendedGamepad=\(controller.extendedGamepad != nil) buttons=\(buttons)")
     }
 
+    // Anchors stop tracking for good in some cases, such as after the main window closes, while
+    // their controller stays connected; a fresh anchor from the same controller tracks again.
+    // A hand untracked for reanchorDelay is rebuilt, then retried at that interval.
+    private func reanchorLostControllers() {
+        let now = Date.timeIntervalSinceReferenceDate
+        for (hand, anchor) in anchors {
+            if anchor.grip.isAnchored {
+                lostSince[hand] = nil
+                continue
+            }
+            let since = lostSince[hand] ?? now
+            lostSince[hand] = since
+            if now - since >= Self.reanchorDelay {
+                NSLog("[GDRK] accessory anchor: \(hand == .leftHand ? "left" : "right") untracked for \(String(format: "%.1f", now - since))s; re-anchoring")
+                lostSince[hand] = now
+                // A rebuild that never resolved doesn't block the retry.
+                reanchoring.remove(hand)
+                reanchor(hand)
+            }
+        }
+    }
+
+    // Queues a hand's controller to be anchored afresh, if it is still connected.
+    private func reanchor(_ hand: ControllerHand) {
+        guard let controller = controllers[hand], !reanchoring.contains(hand),
+              GCController.controllers().contains(where: { $0 === controller }) else { return }
+        reanchoring.insert(hand)
+        pendingControllers.append(controller)
+    }
+
     // Resolves an anchoring source per queued controller and stages the resulting anchors for
     // the next update closure.
     private func resolvePendingControllers() {
@@ -171,9 +229,11 @@ final class AccessoryAnchors {
                     }
                     // The startup scan and the connect notification can queue the same controller
                     // twice, so bail if this device is anchored — but let a different one replace it.
-                    if let anchored = self.controllers[hand], anchored === controller {
+                    if let anchored = self.controllers[hand], anchored === controller,
+                       !self.reanchoring.contains(hand) {
                         return
                     }
+                    self.reanchoring.remove(hand)
                     guard let grip = source.locationName(named: "grip") else {
                         NSLog("[GDRK] accessory anchor: no 'grip' location for controller")
                         return
