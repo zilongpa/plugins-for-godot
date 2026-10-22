@@ -47,9 +47,8 @@ final class AccessoryAnchors {
     private var restarting = false
     private var lastRestart: TimeInterval = 0
     private static let minRestartInterval: TimeInterval = 10
-    // TEMP: device instrumentation for controllers freezing after the launcher closes.
-    private var lastLog: TimeInterval = 0
-    private let logID = Int.random(in: 100...999)
+    // Bumped by each session restart; anchors resolved for an older session are dropped.
+    private var generation = 0
     nonisolated(unsafe) private var connectObserver: NSObjectProtocol? = nil
     private var pendingControllers: [GCController] = []
     // An AnchorEntity(.accessory) resolves asynchronously; resolved anchors wait here until the
@@ -66,19 +65,6 @@ final class AccessoryAnchors {
         if let observer = sceneObserver {
             NotificationCenter.default.removeObserver(observer)
         }
-    }
-
-    // TEMP: once a second per view, whether it still updates, wants anchors, and tracks.
-    private func logState(root: RealityKit.Entity, wants: Bool) {
-        let now = Date.timeIntervalSinceReferenceDate
-        guard now - lastLog >= 1 else { return }
-        lastLog = now
-        let hands = anchors.sorted { $0.key.rawValue < $1.key.rawValue }.map { hand, anchor in
-            let p = Transform(matrix: anchor.grip.transformMatrix(relativeTo: root)).translation
-            let world = anchor.grip.position(relativeTo: nil)
-            return "\(hand == .leftHand ? "L" : "R") grip=\(anchor.grip.isAnchored) aim=\(anchor.aim?.isAnchored ?? false) root=(\(String(format: "%.3f %.3f %.3f", p.x, p.y, p.z))) scene=(\(String(format: "%.3f %.3f %.3f", world.x, world.y, world.z)))"
-        }
-        NSLog("[GDRK] view \(logID): update wants=\(wants) session=\(session != nil) anchors=\(anchors.count) \(hands.joined(separator: " "))")
     }
 
     private func install() {
@@ -101,9 +87,7 @@ final class AccessoryAnchors {
     /// Starts tracking when wanted and pushes poses relative to `root` and input. Call once per
     /// scene update.
     func update(root: RealityKit.Entity, delegate: GDRKBridgeDelegate?) {
-        let wants = delegate?.wantsControllerAnchors() ?? false
-        logState(root: root, wants: wants)
-        guard let delegate, wants else { return }
+        guard let delegate, delegate.wantsControllerAnchors() else { return }
 
         startIfNeeded()
         reanchorLostControllers()
@@ -147,7 +131,7 @@ final class AccessoryAnchors {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.restartSession(because: "a scene disconnected")
+                self?.restartSession()
             }
         }
 
@@ -188,13 +172,23 @@ final class AccessoryAnchors {
         self.session = session
     }
 
-    // Stops the session, runs a new one, then anchors every controller afresh, since anchors
-    // made for the old session no longer resolve. Waits a moment first, so that ARKit has
+    // Stops the session, runs a new one, then anchors every controller afresh. The old
+    // session's anchors are removed first and anchors still resolving for it are dropped, since
+    // they keep querying its invalidated provider. Waits a moment first, so that ARKit has
     // finished tearing down the provider a closing scene invalidates.
-    private func restartSession(because reason: String) {
+    private func restartSession() {
         guard !restarting else { return }
         restarting = true
-        NSLog("[GDRK] accessory tracking: \(reason); restarting the session")
+        generation += 1
+        for anchor in anchors.values {
+            anchor.grip.removeFromParent()
+            anchor.aim?.removeFromParent()
+        }
+        anchors.removeAll()
+        resolvedAnchors.removeAll()
+        pendingControllers.removeAll()
+        lostSince.removeAll()
+        rebuilds.removeAll()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             if let old = self.session {
@@ -203,9 +197,8 @@ final class AccessoryAnchors {
             }
             await self.runSession()
             self.restarting = false
-            self.rebuilds.removeAll()
+            self.reanchoring.removeAll()
             for hand in self.controllers.keys {
-                self.reanchoring.remove(hand)
                 self.reanchor(hand)
             }
         }
@@ -234,10 +227,9 @@ final class AccessoryAnchors {
             let anyTracked = anchors.values.contains { $0.grip.isAnchored }
             if count > Self.maxRebuilds, !anyTracked, now - lastRestart >= Self.minRestartInterval {
                 lastRestart = now
-                restartSession(because: "\(hand == .leftHand ? "left" : "right") hand still untracked after \(Self.maxRebuilds) re-anchors")
+                restartSession()
                 return
             }
-            NSLog("[GDRK] accessory anchor: \(hand == .leftHand ? "left" : "right") untracked for \(String(format: "%.1f", Self.reanchorDelay))s; re-anchoring")
             // A rebuild that never resolved doesn't block the retry.
             reanchoring.remove(hand)
             reanchor(hand)
@@ -259,10 +251,12 @@ final class AccessoryAnchors {
         let queued = pendingControllers
         pendingControllers.removeAll()
 
+        let generation = self.generation
         for controller in queued {
             Task { @MainActor in
                 do {
                     let source = try await AnchoringComponent.AccessoryAnchoringSource(device: controller)
+                    guard generation == self.generation else { return }
                     guard let hand = Self.hand(of: source) else {
                         NSLog("[GDRK] accessory anchor: controller reports no chirality; ignoring")
                         return
