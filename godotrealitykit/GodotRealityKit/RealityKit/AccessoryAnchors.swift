@@ -41,6 +41,12 @@ final class AccessoryAnchors {
     private var lostSince: [ControllerHand: TimeInterval] = [:]
     // Hands whose controller is queued again for a fresh anchor.
     private var reanchoring: Set<ControllerHand> = []
+    // Rebuilds in a row that left a hand untracked; past maxRebuilds the session restarts.
+    private var rebuilds: [ControllerHand: Int] = [:]
+    private static let maxRebuilds = 2
+    private var restarting = false
+    private var lastRestart: TimeInterval = 0
+    private static let minRestartInterval: TimeInterval = 10
     // TEMP: device instrumentation for controllers freezing after the launcher closes.
     private var lastLog: TimeInterval = 0
     private let logID = Int.random(in: 100...999)
@@ -130,27 +136,18 @@ final class AccessoryAnchors {
         NSLog("[GDRK] accessory anchoring started; \(GCController.controllers().count) controller(s) connected")
 
         Task { @MainActor in
-            let session = SpatialTrackingSession()
-            let unavailable = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
-            if let unavailable {
-                NSLog("[GDRK] accessory tracking unavailable: \(unavailable)")
-            }
-            self.session = session
+            await self.runSession()
         }
 
-        // Closing one of the app's scenes, such as the main window, can leave accessory anchors
-        // untracked until a controller connects again, so anchor them afresh.
+        // Closing one of the app's scenes, such as the main window, invalidates ARKit's accessory
+        // tracking provider behind the session, so the session restarts and anchors afresh.
         sceneObserver = NotificationCenter.default.addObserver(
             forName: UIScene.didDisconnectNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                NSLog("[GDRK] accessory anchor: a scene disconnected; re-anchoring")
-                for hand in self.controllers.keys {
-                    self.reanchor(hand)
-                }
+                self?.restartSession(because: "a scene disconnected")
             }
         }
 
@@ -182,25 +179,68 @@ final class AccessoryAnchors {
         NSLog("[GDRK] controller '\(controller.vendorName ?? "?")' category=\(controller.productCategory) extendedGamepad=\(controller.extendedGamepad != nil) buttons=\(buttons)")
     }
 
-    // Anchors stop tracking for good in some cases, such as after the main window closes, while
-    // their controller stays connected; a fresh anchor from the same controller tracks again.
-    // A hand untracked for reanchorDelay is rebuilt, then retried at that interval.
+    private func runSession() async {
+        let session = SpatialTrackingSession()
+        let unavailable = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
+        if let unavailable {
+            NSLog("[GDRK] accessory tracking unavailable: \(unavailable)")
+        }
+        self.session = session
+    }
+
+    // Stops the session, runs a new one, then anchors every controller afresh, since anchors
+    // made for the old session no longer resolve. Waits a moment first, so that ARKit has
+    // finished tearing down the provider a closing scene invalidates.
+    private func restartSession(because reason: String) {
+        guard !restarting else { return }
+        restarting = true
+        NSLog("[GDRK] accessory tracking: \(reason); restarting the session")
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            if let old = self.session {
+                self.session = nil
+                await old.stop()
+            }
+            await self.runSession()
+            self.restarting = false
+            self.rebuilds.removeAll()
+            for hand in self.controllers.keys {
+                self.reanchoring.remove(hand)
+                self.reanchor(hand)
+            }
+        }
+    }
+
+    // Anchors stop tracking for good in some cases while their controller stays connected. A
+    // hand untracked for reanchorDelay is anchored afresh from the same controller, retried at
+    // that interval; if that keeps failing, the session itself restarts.
     private func reanchorLostControllers() {
+        guard !restarting else { return }
         let now = Date.timeIntervalSinceReferenceDate
         for (hand, anchor) in anchors {
             if anchor.grip.isAnchored {
                 lostSince[hand] = nil
+                rebuilds[hand] = nil
                 continue
             }
             let since = lostSince[hand] ?? now
             lostSince[hand] = since
-            if now - since >= Self.reanchorDelay {
-                NSLog("[GDRK] accessory anchor: \(hand == .leftHand ? "left" : "right") untracked for \(String(format: "%.1f", now - since))s; re-anchoring")
-                lostSince[hand] = now
-                // A rebuild that never resolved doesn't block the retry.
-                reanchoring.remove(hand)
-                reanchor(hand)
+            guard now - since >= Self.reanchorDelay else { continue }
+            lostSince[hand] = now
+            let count = (rebuilds[hand] ?? 0) + 1
+            rebuilds[hand] = count
+            // A provider that stopped loses every hand; while one still tracks, it runs, and a
+            // controller merely out of sight shouldn't restart it. Restarts are spaced out too.
+            let anyTracked = anchors.values.contains { $0.grip.isAnchored }
+            if count > Self.maxRebuilds, !anyTracked, now - lastRestart >= Self.minRestartInterval {
+                lastRestart = now
+                restartSession(because: "\(hand == .leftHand ? "left" : "right") hand still untracked after \(Self.maxRebuilds) re-anchors")
+                return
             }
+            NSLog("[GDRK] accessory anchor: \(hand == .leftHand ? "left" : "right") untracked for \(String(format: "%.1f", Self.reanchorDelay))s; re-anchoring")
+            // A rebuild that never resolved doesn't block the retry.
+            reanchoring.remove(hand)
+            reanchor(hand)
         }
     }
 
