@@ -29,24 +29,14 @@ final class AccessoryAnchors {
         let aim: AnchorEntity?
     }
 
-    // Each view runs its own accessory tracking session, as Apple's volume did: a session
-    // shared from the first view stopped tracking once that view's scene closed.
+    // Each view runs its own accessory tracking session, as Apple's volume did.
     private var session: SpatialTrackingSession? = nil
 
     private var started = false
     nonisolated(unsafe) private var sceneObserver: NSObjectProtocol? = nil
-    // Seconds an installed anchor may stay untracked before it is rebuilt.
-    private static let reanchorDelay: TimeInterval = 2
-    // When each hand's grip anchor stopped tracking, or was last rebuilt while still untracked.
-    private var lostSince: [ControllerHand: TimeInterval] = [:]
-    // Hands whose controller is queued again for a fresh anchor.
+    // Hands whose controller is queued for a fresh anchor after a session restart.
     private var reanchoring: Set<ControllerHand> = []
-    // Rebuilds in a row that left a hand untracked; past maxRebuilds the session restarts.
-    private var rebuilds: [ControllerHand: Int] = [:]
-    private static let maxRebuilds = 2
     private var restarting = false
-    private var lastRestart: TimeInterval = 0
-    private static let minRestartInterval: TimeInterval = 10
     // Bumped by each session restart; anchors resolved for an older session are dropped.
     private var generation = 0
     nonisolated(unsafe) private var connectObserver: NSObjectProtocol? = nil
@@ -90,7 +80,6 @@ final class AccessoryAnchors {
         guard let delegate, delegate.wantsControllerAnchors() else { return }
 
         startIfNeeded()
-        reanchorLostControllers()
         resolvePendingControllers()
         install()
 
@@ -187,8 +176,6 @@ final class AccessoryAnchors {
         anchors.removeAll()
         resolvedAnchors.removeAll()
         pendingControllers.removeAll()
-        lostSince.removeAll()
-        rebuilds.removeAll()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             if let old = self.session {
@@ -201,38 +188,6 @@ final class AccessoryAnchors {
             for hand in self.controllers.keys {
                 self.reanchor(hand)
             }
-        }
-    }
-
-    // Anchors stop tracking for good in some cases while their controller stays connected. A
-    // hand untracked for reanchorDelay is anchored afresh from the same controller, retried at
-    // that interval; if that keeps failing, the session itself restarts.
-    private func reanchorLostControllers() {
-        guard !restarting else { return }
-        let now = Date.timeIntervalSinceReferenceDate
-        for (hand, anchor) in anchors {
-            if anchor.grip.isAnchored {
-                lostSince[hand] = nil
-                rebuilds[hand] = nil
-                continue
-            }
-            let since = lostSince[hand] ?? now
-            lostSince[hand] = since
-            guard now - since >= Self.reanchorDelay else { continue }
-            lostSince[hand] = now
-            let count = (rebuilds[hand] ?? 0) + 1
-            rebuilds[hand] = count
-            // A provider that stopped loses every hand; while one still tracks, it runs, and a
-            // controller merely out of sight shouldn't restart it. Restarts are spaced out too.
-            let anyTracked = anchors.values.contains { $0.grip.isAnchored }
-            if count > Self.maxRebuilds, !anyTracked, now - lastRestart >= Self.minRestartInterval {
-                lastRestart = now
-                restartSession()
-                return
-            }
-            // A rebuild that never resolved doesn't block the retry.
-            reanchoring.remove(hand)
-            reanchor(hand)
         }
     }
 
