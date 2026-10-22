@@ -28,11 +28,14 @@ final class AccessoryAnchors {
         let aim: AnchorEntity?
     }
 
-    // One accessory tracking session serves every view.
-    private static var session: SpatialTrackingSession? = nil
-    private static var sessionStarted = false
+    // Each view runs its own accessory tracking session, as Apple's volume did: a session
+    // shared from the first view stopped tracking once that view's scene closed.
+    private var session: SpatialTrackingSession? = nil
 
     private var started = false
+    // TEMP: device instrumentation for controllers freezing after the launcher closes.
+    private var lastLog: TimeInterval = 0
+    private let logID = Int.random(in: 100...999)
     nonisolated(unsafe) private var connectObserver: NSObjectProtocol? = nil
     private var pendingControllers: [GCController] = []
     // An AnchorEntity(.accessory) resolves asynchronously; resolved anchors wait here until the
@@ -46,6 +49,19 @@ final class AccessoryAnchors {
         if let observer = connectObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+    }
+
+    // TEMP: once a second per view, whether it still updates, wants anchors, and tracks.
+    private func logState(root: RealityKit.Entity, wants: Bool) {
+        let now = Date.timeIntervalSinceReferenceDate
+        guard now - lastLog >= 1 else { return }
+        lastLog = now
+        let hands = anchors.sorted { $0.key.rawValue < $1.key.rawValue }.map { hand, anchor in
+            let p = Transform(matrix: anchor.grip.transformMatrix(relativeTo: root)).translation
+            let world = anchor.grip.position(relativeTo: nil)
+            return "\(hand == .leftHand ? "L" : "R") grip=\(anchor.grip.isAnchored) aim=\(anchor.aim?.isAnchored ?? false) root=(\(String(format: "%.3f %.3f %.3f", p.x, p.y, p.z))) scene=(\(String(format: "%.3f %.3f %.3f", world.x, world.y, world.z)))"
+        }
+        NSLog("[GDRK] view \(logID): update wants=\(wants) session=\(session != nil) anchors=\(anchors.count) \(hands.joined(separator: " "))")
     }
 
     private func install() {
@@ -68,7 +84,9 @@ final class AccessoryAnchors {
     /// Starts tracking when wanted and pushes poses relative to `root` and input. Call once per
     /// scene update.
     func update(root: RealityKit.Entity, delegate: GDRKBridgeDelegate?) {
-        guard let delegate, delegate.wantsControllerAnchors() else { return }
+        let wants = delegate?.wantsControllerAnchors() ?? false
+        logState(root: root, wants: wants)
+        guard let delegate, wants else { return }
 
         startIfNeeded()
         resolvePendingControllers()
@@ -99,16 +117,13 @@ final class AccessoryAnchors {
         started = true
         NSLog("[GDRK] accessory anchoring started; \(GCController.controllers().count) controller(s) connected")
 
-        if !Self.sessionStarted {
-            Self.sessionStarted = true
-            Task { @MainActor in
-                let session = SpatialTrackingSession()
-                let unavailable = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
-                if let unavailable {
-                    NSLog("[GDRK] accessory tracking unavailable: \(unavailable)")
-                }
-                Self.session = session
+        Task { @MainActor in
+            let session = SpatialTrackingSession()
+            let unavailable = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
+            if let unavailable {
+                NSLog("[GDRK] accessory tracking unavailable: \(unavailable)")
             }
+            self.session = session
         }
 
         connectObserver = NotificationCenter.default.addObserver(
