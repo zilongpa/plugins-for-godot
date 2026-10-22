@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #import "window_hosts.h"
+#import "controller_xr_interface.h"
 #import "node_loaders.h"
 #import "portal_camera_3d.h"
 #import "scene_tree.h"
@@ -320,6 +321,11 @@ void WindowHosts::window_closed(uint64_t p_window_id) {
 	godot::memdelete(found->second.loader);
 	delete found->second.delegate;
 	hosts.erase(found);
+#if TARGET_OS_XR
+	if (RealityControllerXRInterface *controller_interface = RealityControllerXRInterface::get_active()) {
+		controller_interface->forget_window(p_window_id);
+	}
+#endif
 }
 
 } // namespace gdrk

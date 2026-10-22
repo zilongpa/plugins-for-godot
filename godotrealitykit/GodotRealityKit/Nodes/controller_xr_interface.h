@@ -20,6 +20,8 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 
+#include <map>
+
 namespace gdrk {
 
 // Publishes the spatial controllers' poses as Godot controller trackers.
@@ -29,6 +31,11 @@ namespace gdrk {
 // transform here (see RealityKitBridge.swift); this interface republishes it on the standard
 // "left_hand" / "right_hand" trackers, so XRController3D keeps working unchanged.
 // This interface only tracks: it renders nothing and reports no capabilities.
+//
+// Each volume or portal Window that holds an XROrigin3D sees the controllers in its own space,
+// so its poses also go to trackers of its own, "left_hand_<id>" / "right_hand_<id>", where <id>
+// is the Window's window ID (see tracker_name). The standard trackers carry the poses of the
+// Window holding the current XROrigin3D.
 class RealityControllerXRInterface : public godot::XRInterfaceExtension {
 	GDCLASS(RealityControllerXRInterface, XRInterfaceExtension);
 
@@ -42,6 +49,10 @@ public:
 	// this is null are dropped, which is what keeps accessory tracking off outside a shared
 	// volume and when controller tracking is disabled (see RealitySceneTree::_initialize).
 	static RealityControllerXRInterface *get_active() { return active; }
+
+	// The tracker a Window's controller is published on: "left_hand" / "right_hand" for
+	// p_window_id 0, else with "_<p_window_id>" appended.
+	static godot::StringName tracker_name(godot::XRPositionalTracker::TrackerHand p_hand, uint64_t p_window_id);
 
 	godot::StringName _get_name() const override;
 	uint32_t _get_capabilities() const override;
@@ -66,6 +77,10 @@ public:
 			const godot::Transform3D &p_pose,
 			bool p_tracked);
 
+	// As above, for the trackers of the Window with p_window_id (0 for the standard trackers).
+	void set_anchor_pose(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const godot::Transform3D &p_pose, bool p_tracked);
+	void set_aim_pose(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const godot::Transform3D &p_pose, bool p_tracked);
+
 	// A spatial controller's button / thumbstick state, sampled from GCController by the bridge.
 	struct ControllerInput {
 		float trigger = 0.0f;
@@ -87,6 +102,10 @@ public:
 	void set_controller_input(godot::XRPositionalTracker::TrackerHand p_hand,
 			const ControllerInput &p_input,
 			void *p_gc_controller);
+	void set_controller_input(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand, const ControllerInput &p_input, void *p_gc_controller);
+
+	// Removes a closed Window's trackers.
+	void forget_window(uint64_t p_window_id);
 
 private:
 	struct Pose {
@@ -110,9 +129,14 @@ private:
 	static void publish(Controller &p_controller);
 	static void publish_pose(const godot::Ref<godot::XRControllerTracker> &p_tracker, const godot::StringName &p_name, Pose &p_pose);
 
-	// Maps a tracker name ("left_hand" / "right_hand") to its controller, or null if the name
-	// doesn't match either. Used by _trigger_haptic_pulse, which only gets the tracker name.
+	// Maps a tracker name ("left_hand" / "right_hand", or a Window's) to the standard controller
+	// of that hand, which owns the hand's haptic engine, or null if the name matches neither.
+	// Used by _trigger_haptic_pulse, which only gets the tracker name.
 	Controller *controller_for_tracker(const godot::StringName &p_tracker_name);
+
+	// The controller for p_hand on the Window's trackers, created on first use.
+	Controller &controller_for(uint64_t p_window_id, godot::XRPositionalTracker::TrackerHand p_hand);
+	static godot::Ref<godot::XRControllerTracker> make_tracker(godot::XRPositionalTracker::TrackerHand p_hand, uint64_t p_window_id);
 
 	static void *ensure_haptic_engine(Controller &p_controller);
 	static void release_haptic_engine(Controller &p_controller);
@@ -122,6 +146,8 @@ private:
 	bool initialized = false;
 	Controller left;
 	Controller right;
+	// Window ID to that Window's left and right controllers.
+	std::map<uint64_t, std::pair<Controller, Controller>> windows;
 };
 
 } // namespace gdrk
