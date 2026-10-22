@@ -30,7 +30,7 @@ final class AccessoryAnchors {
     }
 
     // Each view runs its own accessory tracking session, as Apple's volume did.
-    private var session: SpatialTrackingSession? = nil
+    nonisolated(unsafe) private var session: SpatialTrackingSession? = nil
 
     private var started = false
     nonisolated(unsafe) private var sceneObserver: NSObjectProtocol? = nil
@@ -54,6 +54,10 @@ final class AccessoryAnchors {
         }
         if let observer = sceneObserver {
             NotificationCenter.default.removeObserver(observer)
+        }
+        // The view closed: stop its session, which would otherwise keep running unused.
+        if let session {
+            Task { await session.stop() }
         }
     }
 
