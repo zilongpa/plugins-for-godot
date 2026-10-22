@@ -343,12 +343,18 @@ void RealitySceneTree::_initialize() {
 
 	// A shared volume has no compositor services session, so the engine's ARKit-backed tracker
 	// can't run there. Publish the poses of the controllers' RealityKit accessory anchors
-	// instead.
-	if (controller_tracking_enabled && extension_settings.presentationStyle == kVolumetricWindow) {
+	// instead. In the 2D Window style, the volume or portal Window holding the current
+	// XROrigin3D anchors them.
+	const bool shared_space = extension_settings.presentationStyle == kVolumetricWindow || extension_settings.presentationStyle == kWindow2D;
+	if (controller_tracking_enabled && shared_space) {
 		godot::Ref<RealityControllerXRInterface> accessory_interface;
 		accessory_interface.instantiate();
 		xr_server->add_interface(accessory_interface);
 		accessory_interface->initialize();
+		// XRController3D.trigger_haptic_pulse() goes to the primary interface.
+		if (xr_server->get_primary_interface().is_null()) {
+			xr_server->set_primary_interface(accessory_interface);
+		}
 		controller_interface = accessory_interface;
 	}
 

@@ -190,12 +190,17 @@ public:
 	// True while the shared-volume controller XR interface is running, i.e. the presentation
 	// style is a shared volume and controller tracking is enabled. Only then is it worth
 	// anchoring the controllers, since nothing else consumes their poses.
+	// For a volume or portal Window, also only while the Window contains the current XROrigin3D,
+	// so that a single window owns the controllers and poses are in that window's world.
 	bool wantsControllerAnchors() const;
 
 	// Push a spatial controller's AnchorEntity(.accessory) transform, in scene-root-local
 	// space, to the shared-volume controller XR interface. Ignored when that interface isn't
 	// running.
 	void setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const;
+
+	// As setControllerAnchor, for the controller's "aim" location.
+	void setControllerAim(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const;
 
 	// Sample a spatial controller's buttons / thumbstick and publish them on the shared-volume
 	// controller XR interface. p_gc_controller is the GCController as an opaque pointer. Ignored
