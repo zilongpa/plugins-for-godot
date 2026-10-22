@@ -243,49 +243,7 @@ extension RealityView {
 // Stores the bounds of the Swift UI View in RealityKit scene space
 class PortalRealityViewState {
     var lastViewBounds: BoundingBox? = nil
-    var lastCageScale: Float? = nil
     var lastPortalPlanes: [Float]? = nil
-}
-
-// Workaround for : RealityKit's RealityView does not receive
-// .handlesGameControllerEvents when the gaze target is inside the view (e.g.
-// the portal surface), because the GC input remote effect is applied on a
-// layer upstream from the CA hit-test leaf. A collision cage around the view
-// provides a valid hit-test destination so gamepad events reach the app.
-private func createGamepadInputCagePlane(
-        size: SIMD3<Float>,
-        position: SIMD3<Float>) -> RealityKit.Entity {
-    let entity = RealityKit.Entity()
-    entity.position = position
-    var collision = CollisionComponent(shapes: [.generateBox(size: size)], mode: .trigger)
-    collision.isStatic = true
-    entity.components.set(collision)
-    entity.components.set(InputTargetComponent(allowedInputTypes: .all))
-    return entity
-}
-
-private func createGamepadInputCage(size: SIMD3<Float>, thickness: Float = 0.01) -> RealityKit.Entity {
-    let halfSize = size / 2
-    let halfThickness = thickness / 2
-    let container = RealityKit.Entity()
-
-    let frontBackSize = SIMD3<Float>(size.x, size.y, thickness)
-    let leftRightSize = SIMD3<Float>(thickness, size.y, size.z)
-    let topBottomSize = SIMD3<Float>(size.x, thickness, size.z)
-
-    container.addChild(createGamepadInputCagePlane(size: frontBackSize,
-            position: SIMD3(0, 0, halfSize.z - halfThickness)))
-    container.addChild(createGamepadInputCagePlane(size: frontBackSize,
-            position: SIMD3(0, 0, -halfSize.z + halfThickness)))
-    container.addChild(createGamepadInputCagePlane(size: leftRightSize,
-            position: SIMD3(-halfSize.x + halfThickness, 0, 0)))
-    container.addChild(createGamepadInputCagePlane(size: leftRightSize,
-            position: SIMD3(halfSize.x - halfThickness, 0, 0)))
-    container.addChild(createGamepadInputCagePlane(size: topBottomSize,
-            position: SIMD3(0, halfSize.y - halfThickness, 0)))
-    container.addChild(createGamepadInputCagePlane(size: topBottomSize,
-            position: SIMD3(0, -halfSize.y + halfThickness, 0)))
-    return container
 }
 
 // Shows a 2D portal into the game in place of Godot's Camera3D
@@ -302,7 +260,7 @@ struct PortalRealityView : View {
 
     @Environment(\.physicalMetrics) private var physicalMetrics
 
-    @State private var interactionTarget: RealityKit.Entity?
+    let accessories = AccessoryAnchors()
 
     var worldScale: Float {
         let fixedWorldScale = self.fixedWorldScale
@@ -318,21 +276,6 @@ struct PortalRealityView : View {
         delegate?.getPortalWorldScale() ?? 0
     }
 
-    private var handlesGameControllerEvents: Bool {
-        delegate?.getExtensionSettings().handlesGameControllerEvents ?? true
-    }
-
-    private func updateInteractionTarget(_ target: RealityKit.Entity, in proxy: GeometryProxy3D) {
-        let size = physicalMetrics.convert(proxy.size, to: .meters)
-        let minimumDimension: CGFloat = 1.0
-        let maxDimension = Swift.max(size.width, Swift.max(size.height, size.depth))
-        let scale = Float(Swift.max(maxDimension, minimumDimension))
-        if state.lastCageScale != scale {
-            target.transform.scale = SIMD3(repeating: scale)
-            state.lastCageScale = scale
-        }
-    }
-
     public var body: some View {
         GeometryReader3D{ proxy in
             RealityView(make: { content in
@@ -342,12 +285,7 @@ struct PortalRealityView : View {
 
                 content.add(self.root)
                 content.add(self.portal)
-                if self.handlesGameControllerEvents {
-                    let cage = createGamepadInputCage(size: SIMD3<Float>(0.94, 0.43, 0.40))
-                    content.add(cage)
-                    self.updateInteractionTarget(cage, in: proxy)
-                    self.interactionTarget = cage
-                }
+                content.add(self.accessories.container)
 
                 self.subscription = content.subscribe(to: SceneEvents.Update.self, self.onSceneUpdate)
                 self.delegate?.onWorldScaleChanged(self.worldScale)
@@ -363,9 +301,6 @@ struct PortalRealityView : View {
                     self.state.lastViewBounds = viewBounds
                 }
 
-                if let target = self.interactionTarget {
-                    self.updateInteractionTarget(target, in: proxy)
-                }
                 self.updatePortalPlanes()
 
                 self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
@@ -387,6 +322,7 @@ struct PortalRealityView : View {
     private func onSceneUpdate(event: SceneEvents.Update) {
         self.updateCamera()
         self.updatePortalPlanes()
+        self.accessories.update(root: self.root, delegate: self.delegate)
     }
 
     // Clipping and crossing planes from the portal's RealityPortalCamera3D,
@@ -426,8 +362,7 @@ struct PortalRealityView : View {
 }
 
 extension SwiftUI.View {
-    // In portal mode, pair with a collision cage () so gamepad
-    // events are delivered even when the gaze target is inside the RealityView.
+    // In portal mode, gamepad events go only through the Game Controller framework.
     func setupProjectSettings(from delegate: GDRKBridgeDelegate?, portalMode: Bool = false) -> some View {
         let handles = delegate?.getExtensionSettings().handlesGameControllerEvents ?? true
         return self.handlesGameControllerEvents(
@@ -487,17 +422,6 @@ class SharedVolumetricRealityViewState {
     var lastViewBounds: BoundingBox? = nil
     var lastScale: Float? = nil
 
-    // Spatial-accessory anchoring state.
-    var spatialTrackingSession: SpatialTrackingSession? = nil
-    var connectObserver: NSObjectProtocol? = nil
-    var pendingControllers: [GCController] = []
-    // An AnchorEntity(.accessory) resolves asynchronously, but content.add() has to run
-    // synchronously in the update closure, so resolved anchors wait here until the next tick.
-    var resolvedAnchors: [ControllerHand: AnchorEntity] = [:]
-    var anchors: [ControllerHand: AnchorEntity] = [:]
-    // The GCController anchored per hand, polled each frame for button / thumbstick input.
-    var controllers: [ControllerHand: GCController] = [:]
-    var trackingStarted: Bool = false
 }
 
 // Shows the Godot scene in a volumetric window.
@@ -514,18 +438,20 @@ struct SharedVolumetricRealityView : View {
 
     @State private var subscription: EventSubscription? = nil
 
+    let accessories = AccessoryAnchors()
+
     public var body: some View {
         GeometryReader3D{
             proxy in
                 RealityView(make: { content in
                     self.anchor.addChild(self.root)
                     content.add(self.anchor)
+                    content.add(self.accessories.container)
                     self.subscription = content.subscribe(to: SceneEvents.Update.self, self.onSceneUpdate)
             }, update: { content in
                    let viewBounds = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
                    self.updateCamera(viewBounds: viewBounds)
                    self.delegate?.onWindowResized(simd_float3(proxy.size.vector))
-                   self.updateAccessoryAnchors(content: content)
             })
              .installGestures(delegate: self.delegate, root: self.root, size: proxy.size)
             .realityViewLayoutBehavior(.flexible)
@@ -533,131 +459,11 @@ struct SharedVolumetricRealityView : View {
         }
     }
 
-    // Keeps an AnchorEntity(.accessory) attached to each connected spatial controller. Runs only
-    // while the engine's shared-volume controller interface is live, which is what keeps
-    // accessory tracking off in other presentation styles and when controller tracking is
-    // disabled.
-    private func updateAccessoryAnchors(content: RealityViewContent) {
-        guard self.delegate?.wantsControllerAnchors() ?? false else { return }
-
-        self.startAccessoryTrackingIfNeeded()
-
-        for (hand, anchor) in self.state.resolvedAnchors {
-            // Each connect gives the controller a new accessory identity, so the newest resolved
-            // anchor replaces what is installed; the one it replaces can no longer track.
-            if let stale = self.state.anchors[hand] {
-                content.remove(stale)
-            }
-            content.add(anchor)
-            self.state.anchors[hand] = anchor
-        }
-        self.state.resolvedAnchors.removeAll()
-
-        self.resolvePendingControllers()
-    }
-
-    // Starts the accessory tracking session and queues the spatial controllers for anchoring;
-    // an AnchorEntity(.accessory) only resolves once a live session is running.
-    private func startAccessoryTrackingIfNeeded() {
-        guard !self.state.trackingStarted else { return }
-        self.state.trackingStarted = true
-
-        Task { @MainActor in
-            let session = SpatialTrackingSession()
-            _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.accessory]))
-            self.state.spatialTrackingSession = session
-        }
-
-        self.state.connectObserver = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name.GCControllerDidConnect,
-            object: nil,
-            queue: .main
-        ) { notification in
-            guard let controller = notification.object as? GCController,
-                  controller.productCategory == GCProductCategorySpatialController else { return }
-            self.state.pendingControllers.append(controller)
-        }
-
-        for controller in GCController.controllers()
-        where controller.productCategory == GCProductCategorySpatialController {
-            self.state.pendingControllers.append(controller)
-        }
-    }
-
-    // Resolves an anchoring source per queued controller and stages the resulting anchor for the
-    // next update tick.
-    private func resolvePendingControllers() {
-        guard !self.state.pendingControllers.isEmpty else { return }
-        let controllers = self.state.pendingControllers
-        self.state.pendingControllers.removeAll()
-
-        for controller in controllers {
-            Task { @MainActor in
-                do {
-                    let source = try await AnchoringComponent.AccessoryAnchoringSource(device: controller)
-                    guard let hand = Self.hand(of: source) else {
-                        NSLog("[GDRK] accessory anchor: controller reports no chirality; ignoring")
-                        return
-                    }
-                    // The startup scan and the connect notification can queue the same controller
-                    // twice, so bail if this device is anchored — but let a different one replace it.
-                    if let anchored = self.state.controllers[hand], anchored === controller {
-                        return
-                    }
-                    guard let location = source.locationName(named: "grip") else {
-                        NSLog("[GDRK] accessory anchor: no 'grip' location for controller")
-                        return
-                    }
-                    self.state.resolvedAnchors[hand] = AnchorEntity(.accessory(from: source, location: location),
-                                                                    trackingMode: .predicted)
-                    self.state.controllers[hand] = controller
-                } catch {
-                    NSLog("[GDRK] AccessoryAnchoringSource init failed: \(error)")
-                }
-            }
-        }
-    }
-
-    // Spatial controllers come as a handed pair, so the accessory's inherent chirality is the
-    // hand it is held in.
-    private static func hand(of source: AnchoringComponent.AccessoryAnchoringSource) -> ControllerHand? {
-        switch source.underlyingAccessory?.inherentChirality {
-        case .left: return .leftHand
-        case .right: return .rightHand
-        default: return nil
-        }
-    }
-
-    // Pushes each anchored controller's scene-root-local transform to the engine, once per frame.
-    private func publishControllerPoses() {
-        guard let delegate = self.delegate, !self.state.anchors.isEmpty else { return }
-
-        for (hand, anchor) in self.state.anchors {
-            let t = Transform(matrix: anchor.transformMatrix(relativeTo: self.root))
-            delegate.setControllerAnchor(hand, GDRKTransform(
-                scale: t.scale,
-                position: t.translation,
-                orientation: t.rotation
-            ), anchor.isAnchored)
-        }
-    }
-
-    // Pushes each anchored controller to the engine once per frame; the engine samples its
-    // buttons / thumbstick (via GameController) so XRController3D's button_pressed keeps working.
-    private func publishControllerInputs() {
-        guard let delegate = self.delegate, !self.state.controllers.isEmpty else { return }
-
-        for (hand, controller) in self.state.controllers {
-            delegate.setControllerInput(hand, Unmanaged.passUnretained(controller).toOpaque())
-        }
-    }
-
     private func onSceneUpdate(event: SceneEvents.Update) {
         if let viewBounds = self.state.lastViewBounds {
             self.updateCamera(viewBounds: viewBounds)
         }
-        self.publishControllerPoses()
-        self.publishControllerInputs()
+        self.accessories.update(root: self.root, delegate: self.delegate)
     }
 
     private func updateCamera(viewBounds: BoundingBox) {

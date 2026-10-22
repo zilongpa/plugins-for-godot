@@ -33,6 +33,17 @@ static const godot::StringName &default_pose_name() {
 	return name;
 }
 
+// The named poses OpenXR's default action map also provides.
+static const godot::StringName &grip_pose_name() {
+	static const godot::StringName name("grip");
+	return name;
+}
+
+static const godot::StringName &aim_pose_name() {
+	static const godot::StringName name("aim");
+	return name;
+}
+
 godot::StringName RealityControllerXRInterface::_get_name() const {
 	return godot::StringName(interface_name);
 }
@@ -88,6 +99,7 @@ void RealityControllerXRInterface::_uninitialize() {
 		controller->tracker.unref();
 		controller->tracked = false;
 		controller->pose_published = false;
+		controller->aim = Pose();
 		release_haptic_engine(*controller);
 		controller->gc_controller = nullptr;
 	}
@@ -120,6 +132,14 @@ void RealityControllerXRInterface::set_anchor_pose(godot::XRPositionalTracker::T
 	controller.tracked = p_tracked;
 }
 
+void RealityControllerXRInterface::set_aim_pose(godot::XRPositionalTracker::TrackerHand p_hand,
+		const godot::Transform3D &p_pose,
+		bool p_tracked) {
+	Controller &controller = (p_hand == godot::XRPositionalTracker::TRACKER_HAND_LEFT) ? left : right;
+	controller.aim.transform = p_pose;
+	controller.aim.tracked = p_tracked;
+}
+
 void RealityControllerXRInterface::set_controller_input(godot::XRPositionalTracker::TrackerHand p_hand,
 		const ControllerInput &p_input,
 		void *p_gc_controller) {
@@ -148,11 +168,15 @@ void RealityControllerXRInterface::publish(Controller &p_controller) {
 		// velocity to report.
 		p_controller.tracker->set_pose(default_pose_name(), p_controller.pose,
 				godot::Vector3(), godot::Vector3(), godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH);
+		p_controller.tracker->set_pose(grip_pose_name(), p_controller.pose,
+				godot::Vector3(), godot::Vector3(), godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH);
 		p_controller.pose_published = true;
 	} else if (p_controller.pose_published) {
 		p_controller.tracker->invalidate_pose(default_pose_name());
+		p_controller.tracker->invalidate_pose(grip_pose_name());
 		p_controller.pose_published = false;
 	}
+	publish_pose(p_controller.tracker, aim_pose_name(), p_controller.aim);
 
 	if (p_controller.has_input) {
 		const godot::Ref<godot::XRControllerTracker> &tracker = p_controller.tracker;
@@ -166,6 +190,16 @@ void RealityControllerXRInterface::publish(Controller &p_controller) {
 		tracker->set_input("menu_button", in.menu_button);
 		tracker->set_input("primary", in.thumbstick);
 		tracker->set_input("primary_click", in.thumbstick_click);
+	}
+}
+
+void RealityControllerXRInterface::publish_pose(const godot::Ref<godot::XRControllerTracker> &p_tracker, const godot::StringName &p_name, Pose &p_pose) {
+	if (p_pose.tracked) {
+		p_tracker->set_pose(p_name, p_pose.transform, godot::Vector3(), godot::Vector3(), godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH);
+		p_pose.published = true;
+	} else if (p_pose.published) {
+		p_tracker->invalidate_pose(p_name);
+		p_pose.published = false;
 	}
 }
 

@@ -92,6 +92,16 @@ func _export_end() -> void:
 			"Used to track spatial controllers for interacting with content."
 		)
 
+	# visionOS only hands spatial controllers to apps that declare the SpatialGamepad profile;
+	# otherwise GameController never vends them and the system keeps them for pointing.
+	if controller_tracking_enabled and not contents.contains("<string>SpatialGamepad</string>"):
+		if contents.contains("<key>GCSupportedGameControllers</key>"):
+			push_warning("GDRK export: GCSupportedGameControllers in %s lacks the SpatialGamepad profile" % plist_path)
+		elif contents.contains(closing_marker):
+			var addition := "\t<key>GCSupportedGameControllers</key>\n\t<array>\n\t\t<dict>\n\t\t\t<key>ProfileName</key>\n\t\t\t<string>SpatialGamepad</string>\n\t\t</dict>\n\t</array>\n"
+			contents = contents.replace(closing_marker, addition + closing_marker)
+			print("GDRK export: added GCSupportedGameControllers (SpatialGamepad) to %s" % plist_path)
+
 	var w := FileAccess.open(plist_path, FileAccess.WRITE)
 	if w == null:
 		push_warning("GDRK export: cannot write %s (err %d)" % [plist_path, FileAccess.get_open_error()])

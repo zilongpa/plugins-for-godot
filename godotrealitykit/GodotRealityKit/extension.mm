@@ -37,6 +37,7 @@
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/window.hpp>
+#include <godot_cpp/classes/xr_origin3d.hpp>
 #include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
@@ -573,8 +574,55 @@ GDRKTransform GDRKBridgeDelegate::getXROrigin() const {
 	};
 }
 
+static bool contains_current_xr_origin(godot::Node *p_node) {
+	if (p_node == nullptr) {
+		return false;
+	}
+	godot::TypedArray<godot::Node> origins = p_node->find_children("*", "XROrigin3D", true, false);
+	for (int64_t i = 0; i < origins.size(); i++) {
+		godot::XROrigin3D *origin = godot::Object::cast_to<godot::XROrigin3D>(origins[i]);
+		if (origin && origin->is_current()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool GDRKBridgeDelegate::wantsControllerAnchors() const {
-	return gdrk::RealityControllerXRInterface::get_active() != nullptr;
+	if (gdrk::RealityControllerXRInterface::get_active() == nullptr) {
+		return false;
+	}
+	if (!window_id) {
+		return true;
+	}
+	gdrk::SceneLoader *loader = resolve_loader();
+	return loader && contains_current_xr_origin(loader->get_root_node());
+}
+
+// Converts a scene-root-local transform to the space of the current XROrigin3D, which is what
+// XRController3D expects of a tracker pose (it applies the world scale back).
+static godot::Transform3D to_tracker_pose(GDRKTransform p_transform) {
+	godot::Transform3D pose;
+	pose.basis.set_quaternion(convert(p_transform.orientation));
+	pose.basis.scale(convert(p_transform.scale));
+	pose.origin = convert(p_transform.position);
+
+	godot::XRServer *xr_server = godot::XRServer::get_singleton();
+	if (xr_server == nullptr) {
+		return pose;
+	}
+	pose = xr_server->get_world_origin().affine_inverse() * pose;
+	const double world_scale = xr_server->get_world_scale();
+	if (world_scale > 0.0) {
+		pose.origin /= world_scale;
+	}
+	return pose;
+}
+
+static godot::XRPositionalTracker::TrackerHand tracker_hand(ControllerHand p_hand) {
+	return p_hand == kLeftHand
+			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
+			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
 }
 
 void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
@@ -582,17 +630,15 @@ void GDRKBridgeDelegate::setControllerAnchor(ControllerHand p_hand, GDRKTransfor
 	if (controller_interface == nullptr) {
 		return;
 	}
+	controller_interface->set_anchor_pose(tracker_hand(p_hand), to_tracker_pose(p_transform), p_tracked);
+}
 
-	godot::Transform3D pose;
-	pose.basis.set_quaternion(convert(p_transform.orientation));
-	pose.basis.scale(convert(p_transform.scale));
-	pose.origin = convert(p_transform.position);
-
-	const godot::XRPositionalTracker::TrackerHand hand = p_hand == kLeftHand
-			? godot::XRPositionalTracker::TRACKER_HAND_LEFT
-			: godot::XRPositionalTracker::TRACKER_HAND_RIGHT;
-
-	controller_interface->set_anchor_pose(hand, pose, p_tracked);
+void GDRKBridgeDelegate::setControllerAim(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const {
+	gdrk::RealityControllerXRInterface *controller_interface = gdrk::RealityControllerXRInterface::get_active();
+	if (controller_interface == nullptr) {
+		return;
+	}
+	controller_interface->set_aim_pose(tracker_hand(p_hand), to_tracker_pose(p_transform), p_tracked);
 }
 
 void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {

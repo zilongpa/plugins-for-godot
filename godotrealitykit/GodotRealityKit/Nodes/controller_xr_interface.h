@@ -60,6 +60,12 @@ public:
 			const godot::Transform3D &p_pose,
 			bool p_tracked);
 
+	// As set_anchor_pose, for the controller's "aim" location (published as the "aim" pose; the
+	// anchor above is the "grip" location, published as "default" and "grip").
+	void set_aim_pose(godot::XRPositionalTracker::TrackerHand p_hand,
+			const godot::Transform3D &p_pose,
+			bool p_tracked);
+
 	// A spatial controller's button / thumbstick state, sampled from GCController by the bridge.
 	struct ControllerInput {
 		float trigger = 0.0f;
@@ -83,11 +89,18 @@ public:
 			void *p_gc_controller);
 
 private:
+	struct Pose {
+		godot::Transform3D transform;
+		bool tracked = false;
+		bool published = false;
+	};
+
 	struct Controller {
 		godot::Ref<godot::XRControllerTracker> tracker;
 		godot::Transform3D pose;
 		bool tracked = false;
 		bool pose_published = false;
+		Pose aim;
 		ControllerInput input;
 		bool has_input = false;
 		void *gc_controller = nullptr; // Unretained GCController *, refreshed each frame.
@@ -95,6 +108,7 @@ private:
 	};
 
 	static void publish(Controller &p_controller);
+	static void publish_pose(const godot::Ref<godot::XRControllerTracker> &p_tracker, const godot::StringName &p_name, Pose &p_pose);
 
 	// Maps a tracker name ("left_hand" / "right_hand") to its controller, or null if the name
 	// doesn't match either. Used by _trigger_haptic_pulse, which only gets the tracker name.
