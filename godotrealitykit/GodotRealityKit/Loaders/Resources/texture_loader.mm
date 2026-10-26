@@ -12,6 +12,8 @@
 #include "texture_loader.h"
 #include "signposts.h"
 
+#include <TargetConditionals.h>
+
 using namespace gdrk;
 
 uint32_t TextureLoader::find_or_add(godot::RID p_texture_rid, godot::Ref<godot::Texture2D> p_texture, TextureUsage p_usage) {
@@ -118,6 +120,11 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 									.format(godot::Array{ texture_path }));
 				}
 
+				NSUInteger texture_usage = [src_texture usage];
+#if TARGET_OS_SIMULATOR
+				// This copy is only sampled; Simulator rejects swizzled render targets.
+				texture_usage &= ~(MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget);
+#endif
 				swift::Optional<GodotRealityKit::LowLevelTexture> low_level_texture =
 						GodotRealityKit::LowLevelTexture::init([src_texture textureType],
 								[src_texture pixelFormat],
@@ -126,7 +133,7 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 								[src_texture depth],
 								[src_texture mipmapLevelCount],
 								[src_texture arrayLength],
-								[src_texture usage],
+								texture_usage,
 								[src_texture swizzle]);
 
 				ERR_FAIL_COND_V_MSG(low_level_texture.isNone(), LocalBitVector::IterationResult::SKIPPED, "Failed to create low level texture");

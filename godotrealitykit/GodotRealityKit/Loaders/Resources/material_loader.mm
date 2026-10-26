@@ -23,6 +23,7 @@
 #include "Materials/material_bridge.h"
 
 #include "types.h"
+#include <TargetConditionals.h>
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/resource_loader.hpp>
@@ -160,6 +161,14 @@ static void update_base_material3D(TextureLoader &p_textures, const ProgramDescr
 
 	SET_COLOR(ALBEDO);
 	SET_TEXTURE(TEXTURE_ALBEDO);
+#if TARGET_OS_SIMULATOR
+	if (d.get_flag(BM::FLAG_ALBEDO_TEXTURE_MSDF) && !d.get_flag(BM::FLAG_UV1_USE_TRIPLANAR)) {
+		SET_FLOAT(MSDF_PIXEL_RANGE);
+		SET_FLOAT(MSDF_OUTLINE_SIZE);
+		const godot::Vector2 atlas_size = PARAM(ALBEDO_TEXTURE_SIZE);
+		p_sgl_material.setFloat2(ALBEDO_TEXTURE_SIZE, GodotRealityKit::Vector2::init(atlas_size.x, atlas_size.y));
+	}
+#endif
 	SET_FLOAT(METALLIC);
 	SET_FLOAT(SPECULAR);
 	SET_TEXTURE(TEXTURE_METALLIC);

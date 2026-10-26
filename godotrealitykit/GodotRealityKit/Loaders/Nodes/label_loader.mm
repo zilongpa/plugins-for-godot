@@ -13,7 +13,9 @@
 #include "mesh_common.h"
 #include "signposts.h"
 
+#include <TargetConditionals.h>
 #include <godot_cpp/classes/font.hpp>
+#include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/text_server_manager.hpp>
 
 using namespace gdrk;
@@ -21,7 +23,6 @@ using namespace gdrk;
 auto get_label_text_prop_hasher() {
 	using L = godot::Label3D;
 	return make_object_property_hasher(make_object_property(&L::get_autowrap_mode),
-			make_object_property(&L::get_font),
 			make_object_property(&L::get_font_size),
 			make_object_property(&L::get_justification_flags),
 			make_object_property(&L::get_language),
@@ -62,7 +63,7 @@ auto get_label_material_prop_hasher() {
 			make_object_property(&L::get_texture_filter));
 }
 
-ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p_outline) {
+ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p_outline, bool p_is_msdf, bool p_is_la8_font_atlas) {
 	using L = godot::Label3D;
 	using BM = godot::BaseMaterial3D;
 	BM::Transparency transparency = BM::TRANSPARENCY_ALPHA;
@@ -85,12 +86,7 @@ ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p
 		flags |= (1 << BM::FLAG_BILLBOARD_KEEP_SCALE);
 	}
 
-	// We currently hope that if this base font RID has MSDF textures,
-	// then the rest of the font variations also use MSDF textures
-	const godot::Ref<godot::Font> font = p_node->get_font();
-	godot::Ref<godot::TextServer> text_server =
-			godot::TextServerManager::get_singleton()->get_primary_interface();
-	if (font.is_valid() && text_server->font_is_multichannel_signed_distance_field(font->get_rid())) {
+	if (p_is_msdf) {
 		flags |= (1 << BM::FLAG_ALBEDO_TEXTURE_MSDF);
 	}
 
@@ -102,6 +98,7 @@ ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p
 		.texture_filter = p_node->get_texture_filter(),
 		.billboard_mode = p_node->get_billboard_mode(),
 		.flags = flags,
+		.albedo_texture_is_la8_font_atlas = p_is_la8_font_atlas,
 		.use_depth_postpass = true,
 	};
 }
@@ -130,6 +127,11 @@ void LabelLoader::update_deps(
 		godot::Label3D *node = nodes[idx];
 
 		uint32_t mesh_hash_state = text_prop_hasher.hash(node);
+		// PtrToArg<Ref<Font>>::encode expects an engine-side Ref, so the generic
+		// property hasher cannot safely use it with a godot-cpp Ref temporary.
+		// Hash the font's identity directly, retaining the reference normally.
+		const godot::Ref<godot::Font> font = node->get_font();
+		mesh_hash_state = godot::hash_murmur3_one_64(font.is_valid() ? font->get_instance_id() : 0, mesh_hash_state);
 		uint32_t material_hash_state = material_prop_hasher.hash(node);
 		accum_mesh_hash(node, mesh_hash_state, material_hash_state);
 
@@ -155,10 +157,23 @@ void LabelLoader::update_deps(
 		const uint32_t material_hash = godot::hash_fmix32(material_hash_state);
 		if (dep_states[idx].material_hash != material_hash || text_dirty) {
 			bool is_outline = false;
-			ProgramDescription material_description = get_label_material_description(node, false);
-			ProgramDescription outline_material_description = get_label_material_description(node, true);
+#if !TARGET_OS_SIMULATOR
+			godot::Ref<godot::TextServer> text_server =
+					godot::TextServerManager::get_singleton()->get_primary_interface();
+			const bool is_msdf = font.is_valid() && text_server->font_is_multichannel_signed_distance_field(font->get_rid());
+#endif
 			for (uint32_t material_idx : add_material_deps(changed_material_deps, materials, idx, node)) {
-				ProgramDescription desc = is_outline ? outline_material_description : material_description;
+				const godot::RID material_rid = materials->get_rid(material_idx);
+				ERR_CONTINUE(!material_rid.is_valid());
+				const godot::RID albedo_texture_rid = rs->material_get_param(material_rid, "texture_albedo");
+				bool is_la8_font_atlas = false;
+#if TARGET_OS_SIMULATOR
+				// Fallback fonts can use a different atlas type than the label's base font.
+				const bool is_msdf = rs->material_get_param(material_rid, "msdf_pixel_range").get_type() != godot::Variant::NIL;
+				is_la8_font_atlas = !is_msdf && albedo_texture_rid.is_valid() &&
+						rs->texture_get_format(albedo_texture_rid) == godot::Image::FORMAT_LA8;
+#endif
+				ProgramDescription desc = get_label_material_description(node, is_outline, is_msdf, is_la8_font_atlas);
 				if (!is_outline) {
 					is_outline = true;
 				}
@@ -167,10 +182,6 @@ void LabelLoader::update_deps(
 				materials->mark_dirty(material_idx);
 
 				if (text_dirty) {
-					const godot::RID material_rid = materials->get_rid(material_idx);
-					ERR_CONTINUE(!material_rid.is_valid());
-
-					const godot::RID albedo_texture_rid = rs->material_get_param(material_rid, "texture_albedo");
 					if (albedo_texture_rid.is_valid()) {
 						const uint32_t albedo_texture_idx = textures->find_or_add(albedo_texture_rid);
 						textures->mark_dirty(albedo_texture_idx);

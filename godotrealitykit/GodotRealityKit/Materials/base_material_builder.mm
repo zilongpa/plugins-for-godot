@@ -16,6 +16,7 @@
 
 #include "material_bridge.h"
 
+#include <TargetConditionals.h>
 #include <godot_cpp/classes/project_settings.hpp>
 
 using namespace gdrk;
@@ -437,9 +438,51 @@ bool BaseMaterialBuilder::build(swift::Array<GodotRealityKit::ProgramPart> &p_pr
 
 	// MARK: Surface Shader
 
+#if TARGET_OS_SIMULATOR
+	if (d.get_flag(BM::FLAG_ALBEDO_TEXTURE_MSDF) && !d.get_flag(BM::FLAG_UV1_USE_TRIPLANAR)) {
+		SG_DECLARATIONS(color_functions);
+		// Match Godot's MSDF coverage and outline calculation. Albedo textures
+		// are bound as sRGB, so undo that conversion before decoding distances.
+		SG(
+				uniform msdf_pixel_range : float = 4.0f;
+				uniform msdf_outline_size : float = 0.0f;
+				uniform albedo_texture_size : float2 = (1.0f, 1.0f);
+				let msdf_tex = sample_tex2d_uv1_c4(texture_albedo, (0.0h, 0.0h, 0.0h, 0.0h)c);
+				let msdf_rgb = linear_to_srgb(c4_xyz(msdf_tex));
+				let msdf_distance = ND_max_float(ND_min_float(v3_x(msdf_rgb), v3_y(msdf_rgb)),
+						ND_min_float(ND_max_float(v3_x(msdf_rgb), v3_y(msdf_rgb)), v3_z(msdf_rgb)));
+				let msdf_range = ND_max_float(msdf_pixel_range, 0.000001f);
+				let msdf_unit_range = ND_divide_vector2(ND_combine2_vector2(msdf_range, msdf_range),
+						ND_max_vector2(albedo_texture_size, (1.0f, 1.0f)));
+				let msdf_screen_size = ND_divide_vector2((1.0f, 1.0f),
+						ND_max_vector2(ND_MTL_fwidth_vector2(ND_texcoord_vector2(0)), (0.000001f, 0.000001f)));
+				let msdf_screen_range = ND_max_float(ND_multiply_float(0.5f,
+						ND_dotproduct_vector2(msdf_unit_range, msdf_screen_size)), 1.0f);
+				let msdf_outline_shift = ND_divide_float(ND_clamp_float(msdf_outline_size, 0.0f,
+						ND_max_float(ND_subtract_float(ND_multiply_float(msdf_range, 0.5f), 1.0f), 0.0f)), msdf_range);
+				let msdf_fill_coverage = ND_add_float(ND_multiply_float(ND_subtract_float(msdf_distance, 0.5f), msdf_screen_range), 0.5f);
+				let msdf_outline_coverage = ND_multiply_float(ND_add_float(
+						ND_subtract_float(ND_min_float(msdf_distance, c4_a(msdf_tex)), 0.5f), msdf_outline_shift), msdf_screen_range);
+				let msdf_coverage = ND_clamp_float(ND_ifgreater_float(msdf_outline_size, 0.0f,
+						msdf_outline_coverage, msdf_fill_coverage), 0.0f, 1.0f);
+				let albedo_color = ND_multiply_color4(albedo_color, ND_combine4_color4(1.0f, 1.0f, 1.0f, msdf_coverage));)
+	} else if (d.albedo_texture_is_la8_font_atlas) {
+		// Simulator exposes an LA8 atlas as RG: restore luminance RGB and alpha.
+		// Keep each branch in one SG call to avoid validating an intermediate graph.
+		SG(
+				let albedo_tex = sample_tex2d_uv1_c4(texture_albedo, (1.0h, 1.0h, 1.0h, 1.0h)c);
+				let font_albedo_tex = ND_swizzle_color4_color4(albedo_tex, "rrrg");
+				let albedo_color = ND_multiply_color4(albedo_color, font_albedo_tex);)
+	} else {
+		SG(
+				let albedo_tex = sample_tex2d_uv1_c4(texture_albedo, (1.0h, 1.0h, 1.0h, 1.0h)c);
+				let albedo_color = ND_multiply_color4(albedo_color, albedo_tex);)
+	}
+#else
 	SG(
 			let albedo_tex = sample_tex2d_uv1_c4(texture_albedo, (1.0h, 1.0h, 1.0h, 1.0h)c);
 			let albedo_color = ND_multiply_color4(albedo_color, albedo_tex);)
+#endif
 
 	if (d.get_flag(BM::FLAG_ALBEDO_FROM_VERTEX_COLOR)) {
 		SG(
