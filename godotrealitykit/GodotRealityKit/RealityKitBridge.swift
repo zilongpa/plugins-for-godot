@@ -174,8 +174,9 @@ extension RealityView {
         let selectionRay: GDRKRay? = nil
 #else
         let selectionRay = event.selectionRay.map{ ray in
-            return GDRKRay(origin: root.convert(position: value.convert(ray.origin, from: .local, to: .scene), to: nil),
-                         direction: root.convert(direction: value.convert(ray.direction, from: .local, to: .scene), to: nil))
+            // From the scene into the Godot root, like every other position here.
+            return GDRKRay(origin: root.convert(position: value.convert(ray.origin, from: .local, to: .scene), from: nil),
+                         direction: root.convert(direction: value.convert(ray.direction, from: .local, to: .scene), from: nil))
         }
 #endif
 
