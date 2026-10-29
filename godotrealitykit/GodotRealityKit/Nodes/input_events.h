@@ -59,6 +59,15 @@ protected:
 
 		BIND_ENUM_CONSTANT(CHIRALITY_LEFT);
 		BIND_ENUM_CONSTANT(CHIRALITY_RIGHT);
+
+		godot::ClassDB::bind_method(godot::D_METHOD("get_kind"), &InputEventSpatialTouch::get_kind);
+		godot::ClassDB::bind_method(godot::D_METHOD("set_kind", "kind"), &InputEventSpatialTouch::set_kind);
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "kind", godot::PROPERTY_HINT_ENUM, "Touch,Direct Pinch,Indirect Pinch,Pointer"), "set_kind", "get_kind");
+
+		BIND_ENUM_CONSTANT(KIND_TOUCH);
+		BIND_ENUM_CONSTANT(KIND_DIRECT_PINCH);
+		BIND_ENUM_CONSTANT(KIND_INDIRECT_PINCH);
+		BIND_ENUM_CONSTANT(KIND_POINTER);
 	}
 
 public:
@@ -77,6 +86,15 @@ public:
 	enum Chirality {
 		CHIRALITY_LEFT,
 		CHIRALITY_RIGHT,
+	};
+
+	// How the event began, as SwiftUI's SpatialEventCollection.Event.Kind: a finger
+	// touching, a pinch on or toward the target, or a pointing device.
+	enum Kind {
+		KIND_TOUCH,
+		KIND_DIRECT_PINCH,
+		KIND_INDIRECT_PINCH,
+		KIND_POINTER,
 	};
 
 	bool get_flag(Flags p_flag) const { return flags[uint32_t(p_flag)]; }
@@ -105,6 +123,9 @@ public:
 	Chirality get_chirality() const { return chirality; }
 	void set_chirality(Chirality p_chirality) { chirality = p_chirality; }
 
+	Kind get_kind() const { return kind; }
+	void set_kind(Kind p_kind) { kind = p_kind; }
+
 private:
 	godot::Vector3 world_position;
 
@@ -115,6 +136,7 @@ private:
 	godot::Quaternion input_device_pose_orientation;
 
 	Chirality chirality = CHIRALITY_RIGHT;
+	Kind kind = KIND_INDIRECT_PINCH;
 
 	bool flags[FLAG_MAX] = {};
 };
@@ -159,6 +181,10 @@ protected:
 		godot::ClassDB::bind_method(godot::D_METHOD("get_chirality"), &InputEventSpatialDrag::get_chirality);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_chirality", "chirality"), &InputEventSpatialDrag::set_chirality);
 		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "chirality"), "set_chirality", "get_chirality");
+
+		godot::ClassDB::bind_method(godot::D_METHOD("get_kind"), &InputEventSpatialDrag::get_kind);
+		godot::ClassDB::bind_method(godot::D_METHOD("set_kind", "kind"), &InputEventSpatialDrag::set_kind);
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "kind", godot::PROPERTY_HINT_ENUM, "Touch,Direct Pinch,Indirect Pinch,Pointer"), "set_kind", "get_kind");
 	}
 
 public:
@@ -200,6 +226,9 @@ public:
 		chirality = p_chirality;
 	}
 
+	InputEventSpatialTouch::Kind get_kind() const { return kind; }
+	void set_kind(InputEventSpatialTouch::Kind p_kind) { kind = p_kind; }
+
 private:
 	godot::Vector3 world_position;
 	godot::Vector3 world_relative;
@@ -211,6 +240,7 @@ private:
 	godot::Quaternion input_device_pose_orientation;
 
 	InputEventSpatialTouch::Chirality chirality = InputEventSpatialTouch::CHIRALITY_RIGHT;
+	InputEventSpatialTouch::Kind kind = InputEventSpatialTouch::KIND_INDIRECT_PINCH;
 
 	bool flags[InputEventSpatialTouch::FLAG_MAX] = {};
 };
@@ -219,5 +249,6 @@ private:
 
 VARIANT_ENUM_CAST(gdrk::InputEventSpatialTouch::Flags)
 VARIANT_ENUM_CAST(gdrk::InputEventSpatialTouch::Chirality)
+VARIANT_ENUM_CAST(gdrk::InputEventSpatialTouch::Kind)
 
 #endif // INPUT_EVENTS_H

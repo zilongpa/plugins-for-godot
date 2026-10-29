@@ -195,6 +195,14 @@ extension RealityView {
         }
 #endif
 
+        // Matches InputEventSpatialTouch::Kind.
+        let kind: UInt32 = switch event.kind {
+        case .touch: 0
+        case .directPinch: 1
+        case .indirectPinch: 2
+        default: 3
+        }
+
         delegate?.onEntityPressUpdate(Int64(eventID),
                                       ended,
                                       UInt64(entityID),
@@ -207,7 +215,8 @@ extension RealityView {
                                       selectionRay != nil,
                                       selectionRay ?? GDRKRay(),
                                       chirality != nil,
-                                      chirality ?? UInt32(1))
+                                      chirality ?? UInt32(1),
+                                      kind)
     }
 
     private func spatialEventGesture(delegate: GDRKBridgeDelegate?, root: RealityKit.Entity, size: Size) -> some Gesture {

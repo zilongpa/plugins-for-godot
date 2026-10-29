@@ -454,7 +454,8 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		bool p_has_selection_ray,
 		GDRKRay p_selection_ray,
 		bool p_has_chirality,
-		uint32_t p_chirality) const {
+		uint32_t p_chirality,
+		uint32_t p_kind) const {
 	gdrk::SceneLoader *loader = resolve_loader();
 	if (!loader) {
 		return;
@@ -520,6 +521,7 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		touch_event->set_input_device_pose_orientation(gdrk::from_quatf(p_input_device_pose.orientation));
 
 		touch_event->set_chirality(p_chirality == 0 ? gdrk::InputEventSpatialTouch::CHIRALITY_LEFT : gdrk::InputEventSpatialTouch::CHIRALITY_RIGHT);
+		touch_event->set_kind(gdrk::InputEventSpatialTouch::Kind(p_kind));
 
 		input_event = touch_event;
 	} else {
@@ -550,6 +552,7 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 		drag_event->set_input_device_pose_orientation(gdrk::from_quatf(p_input_device_pose.orientation));
 
 		drag_event->set_chirality(p_chirality == 0 ? gdrk::InputEventSpatialTouch::CHIRALITY_LEFT : gdrk::InputEventSpatialTouch::CHIRALITY_RIGHT);
+		drag_event->set_kind(gdrk::InputEventSpatialTouch::Kind(p_kind));
 
 		input_event = drag_event;
 	}
