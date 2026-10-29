@@ -134,6 +134,11 @@ extension RealityView {
 
     private func handleEvent(event: SpatialEventCollection.Event, value: Value, delegate: GDRKBridgeDelegate?, root: RealityKit.Entity, size: Size, ended: Bool) {
         let eventID = event.id.hashValue
+        // A cancelled event never ends, so its press would stay held.
+        if event.phase == .cancelled {
+            delegate?.cancelSpatialPress(Int64(eventID))
+            return
+        }
 
 #if os(macOS)
         let position3D: SIMD3<Float>? = nil
@@ -142,10 +147,12 @@ extension RealityView {
 #endif
 
         guard let ray = self.calculateRay(delegate: delegate, event: event, value: value, size: size) else {
+            if ended { delegate?.cancelSpatialPress(Int64(eventID)) }
             return
         }
 
         guard let hits = root.scene?.raycast(origin: ray.origin, direction: ray.direction) else {
+            if ended { delegate?.cancelSpatialPress(Int64(eventID)) }
             return
         }
 

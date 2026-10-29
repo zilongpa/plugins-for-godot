@@ -470,9 +470,17 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 	}
 
 	if (is_first_press) {
+		// A free slot, so a held press isn't overwritten; with none, the oldest goes.
 		cur_press_idx = loader->next_active_press_idx;
-		loader->next_active_press_idx = (loader->next_active_press_idx + 1) % loader->max_active_presses;
+		for (uint32_t press_idx = 0; press_idx < loader->max_active_presses; press_idx++) {
+			if (loader->active_presses[press_idx] == -1) {
+				cur_press_idx = press_idx;
+				break;
+			}
+		}
+		loader->next_active_press_idx = (cur_press_idx + 1) % loader->max_active_presses;
 		loader->active_presses[cur_press_idx] = p_event_id;
+		loader->active_press_targets[cur_press_idx] = {};
 	}
 
 	godot::Node3D *camera = loader->get_nodes()->get_cameras().get_current_node();
@@ -550,14 +558,28 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 	loader->last_active_press_location[cur_press_idx] = location;
 
 	if (node) {
-		loader->push_input_event(gdrk::ColliderInputEventParams{
-				.collider_id = node->get_instance_id(),
-				.camera_id = camera->get_instance_id(),
-				.input_event = input_event,
-				.position = gdrk::from_simd3(p_hit_position),
-				.normal = gdrk::from_simd3(p_hit_normal),
-				.shape_idx = p_hit_shape_idx,
-		});
+		const gdrk::ColliderInputEventParams params{
+			.collider_id = node->get_instance_id(),
+			.camera_id = camera->get_instance_id(),
+			.input_event = input_event,
+			.position = gdrk::from_simd3(p_hit_position),
+			.normal = gdrk::from_simd3(p_hit_normal),
+			.shape_idx = p_hit_shape_idx,
+		};
+		if (is_first_press) {
+			loader->active_press_targets[cur_press_idx] = params;
+		}
+		loader->push_input_event(params);
+	}
+	if (p_ended) {
+		loader->active_presses[cur_press_idx] = -1;
+		loader->active_press_targets[cur_press_idx] = {};
+	}
+}
+
+void GDRKBridgeDelegate::cancelSpatialPress(int64_t p_event_id) const {
+	if (gdrk::SceneLoader *loader = resolve_loader()) {
+		loader->cancel_press(p_event_id);
 	}
 }
 

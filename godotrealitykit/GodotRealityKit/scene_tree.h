@@ -90,6 +90,9 @@ public:
 
 	void flush_input_events();
 
+	// Sends a canceled touch for press [p_id] to the object it pressed, and forgets the press.
+	void cancel_press(int64_t p_id);
+
 	void call_on_next_frame_completion(const std::function<void()> &p_on_next_frame_completion);
 
 private:
@@ -117,6 +120,8 @@ private:
 	mutable std::array<int64_t, max_active_presses> active_presses;
 	mutable std::array<simd_float3, max_active_presses> last_active_press_position;
 	mutable std::array<simd_float2, max_active_presses> last_active_press_location;
+	// The object each press began on, which its cancellation goes to.
+	mutable std::array<ColliderInputEventParams, max_active_presses> active_press_targets = {};
 	mutable uint32_t next_active_press_idx = 0;
 
 	std::optional<std::function<void()>> on_next_frame_completion;

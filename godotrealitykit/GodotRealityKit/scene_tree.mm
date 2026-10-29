@@ -11,6 +11,7 @@
 
 #import "scene_tree.h"
 #import "controller_xr_interface.h"
+#import "input_events.h"
 #import "node_loaders.h"
 #import "resource_loaders.h"
 #import "window_hosts.h"
@@ -72,6 +73,7 @@ void SceneLoader::initialize(godot::Node *p_node, GodotRealityKit::Entity p_enti
 
 	root_node = p_node;
 	root_entity = p_entity;
+	active_presses.fill(-1);
 
 	const uint32_t frame_delay = rendering_device()->get_frame_delay();
 	command_buffers.resize(frame_delay);
@@ -216,6 +218,29 @@ void SceneLoader::update() {
 
 void SceneLoader::call_on_next_frame_completion(const std::function<void()> &p_on_next_frame_completion) {
 	on_next_frame_completion = p_on_next_frame_completion;
+}
+
+void SceneLoader::cancel_press(int64_t p_id) {
+	for (uint32_t i = 0; i < max_active_presses; i++) {
+		if (active_presses[i] != p_id) {
+			continue;
+		}
+		active_presses[i] = -1;
+		ColliderInputEventParams params = active_press_targets[i];
+		active_press_targets[i] = {};
+		if (!params.collider_id) {
+			continue;
+		}
+		godot::Ref<InputEventSpatialTouch> event;
+		event.instantiate();
+		event->set_index(int32_t(p_id));
+		event->set_pressed(false);
+		event->set_canceled(true);
+		event->set_world_position(from_simd3(last_active_press_position[i]));
+		event->set_position(from_simd2(last_active_press_location[i]));
+		params.input_event = event;
+		push_input_event(params);
+	}
 }
 
 void SceneLoader::flush_input_events() {

@@ -226,6 +226,9 @@ public:
 			bool p_has_chirality,
 			uint32_t p_chirality) const;
 
+	// Ends a press that visionOS cancelled, with a canceled touch to the object it pressed.
+	void cancelSpatialPress(int64_t p_event_id) const;
+
 private:
 	mutable gdrk::SceneLoader *loader = nullptr;
 	uint64_t window_id = 0;
