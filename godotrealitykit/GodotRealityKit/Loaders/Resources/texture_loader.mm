@@ -62,6 +62,7 @@ uint32_t TextureLoader::find_or_add(godot::RID p_texture_rid, godot::Ref<godot::
 bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 	PROFILE_FUNC_SCOPE;
 
+	created_resources_in_update = false;
 	for_each_valid([&](uint32_t idx) {
 		if (textures[idx].is_viewport_texture || textures[idx].dirty_usages != 0) {
 			mark_dirty(idx);
@@ -154,6 +155,7 @@ bool TextureLoader::update(id<MTLCommandBuffer> p_command_buffer) {
 					texture.rd_texture_linear_rid = rd_texture_rid;
 					ERR_FAIL_COND_V(!texture.resource_linear.isSome(), LocalBitVector::IterationResult::SKIPPED);
 				}
+				created_resources_in_update = true;
 			} else if (rd_texture_rid.is_valid()) {
 				id<MTLTexture> dst_texture = nil;
 				swift::Optional<GodotRealityKit::LowLevelTexture> low_level_texture = swift::Optional<GodotRealityKit::LowLevelTexture>::none();

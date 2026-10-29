@@ -67,6 +67,12 @@ public:
 		textures[p_idx].purge_after_upload = p_purge_after_upload;
 	}
 
+	// Whether the last update created RealityKit textures. Materials bind their
+	// textures before that update, so they don't have these yet.
+	bool created_resources() const {
+		return created_resources_in_update;
+	}
+
 private:
 	struct Texture {
 		uint8_t required_usages;
@@ -93,6 +99,7 @@ private:
 
 	RID_Associated<uint32_t> texture_rid_to_idx;
 	godot::LocalVector<Texture> textures;
+	bool created_resources_in_update = false;
 };
 
 } //namespace gdrk

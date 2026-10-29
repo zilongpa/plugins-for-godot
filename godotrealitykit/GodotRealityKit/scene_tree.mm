@@ -168,6 +168,11 @@ void SceneLoader::update() {
 	bool finished = true;
 	finished &= materials->update(command_buffer, textures);
 	finished &= textures->update(command_buffer);
+	// A mesh shown in the frame its texture is created would otherwise go
+	// without that texture until the next frame.
+	if (textures->created_resources()) {
+		finished &= materials->update(command_buffer, textures);
+	}
 	finished &= meshes->update(command_buffer);
 	finished &= multimeshes->update();
 	finished &= shapes->update();
