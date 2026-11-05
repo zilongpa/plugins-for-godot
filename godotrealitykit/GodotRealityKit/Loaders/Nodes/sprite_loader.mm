@@ -67,9 +67,6 @@ ProgramDescription get_sprite_base_material_description(godot::SpriteBase3D *p_n
 	if (p_node->get_draw_flag(SB::FLAG_FIXED_SIZE)) {
 		flags |= (1 << BM::FLAG_FIXED_SIZE);
 	}
-	if (p_node->get_billboard_mode() != BM::BILLBOARD_DISABLED) {
-		flags |= (1 << BM::FLAG_BILLBOARD_KEEP_SCALE);
-	}
 
 	return BaseMaterial3DDescription{
 		.render_priority = p_node->get_render_priority(),
@@ -77,7 +74,8 @@ ProgramDescription get_sprite_base_material_description(godot::SpriteBase3D *p_n
 		.transparency = transparency,
 		.cull_mode = p_node->get_draw_flag(SB::FLAG_DOUBLE_SIDED) ? BM::CULL_DISABLED : BM::CULL_BACK,
 		.texture_filter = p_node->get_texture_filter(),
-		.billboard_mode = p_node->get_billboard_mode(),
+		// The entity itself faces the person, in update(); see Entity.setBillboard.
+		.billboard_mode = BM::BILLBOARD_DISABLED,
 		.flags = flags,
 		.use_depth_postpass = true,
 	};
@@ -202,6 +200,7 @@ void SpriteLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 		godot::Sprite3D *node = nodes[idx];
 		ERR_FAIL_NULL(node);
 
+		node_entities[idx].entity.setBillboard(node->get_billboard_mode() != godot::BaseMaterial3D::BILLBOARD_DISABLED);
 		node_entities[idx].entity.clearChildren();
 		for (GodotRealityKit::Entity child : node_to_entities(node, meshes, materials, multimeshes)) {
 			node_entities[idx].entity.addChild(child);

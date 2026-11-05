@@ -807,6 +807,18 @@ public struct Entity: @unchecked Sendable {
         }
     }
 
+    /// Lets RealityKit turn the entity to face the person, each entity toward
+    /// where their head is, rather than every one parallel to their view.
+    public func setBillboard(_ enabled: Bool) {
+        MainActor.assumeIsolated {
+            if !enabled {
+                self.value.components.remove(BillboardComponent.self)
+            } else if !self.value.components.has(BillboardComponent.self) {
+                self.value.components.set(BillboardComponent())
+            }
+        }
+    }
+
     public func setRotation(_ rotation: Vector4) {
         MainActor.assumeIsolated {
             self.value.orientation = rotation.to_simd_quat()

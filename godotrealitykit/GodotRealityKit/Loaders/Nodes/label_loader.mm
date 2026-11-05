@@ -82,9 +82,6 @@ ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p
 	if (p_node->get_draw_flag(L::FLAG_FIXED_SIZE)) {
 		flags |= (1 << BM::FLAG_FIXED_SIZE);
 	}
-	if (p_node->get_billboard_mode() != BM::BILLBOARD_DISABLED) {
-		flags |= (1 << BM::FLAG_BILLBOARD_KEEP_SCALE);
-	}
 
 	if (p_is_msdf) {
 		flags |= (1 << BM::FLAG_ALBEDO_TEXTURE_MSDF);
@@ -96,7 +93,8 @@ ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p
 		.transparency = transparency,
 		.cull_mode = p_node->get_draw_flag(L::FLAG_DOUBLE_SIDED) ? BM::CULL_DISABLED : BM::CULL_BACK,
 		.texture_filter = p_node->get_texture_filter(),
-		.billboard_mode = p_node->get_billboard_mode(),
+		// The entity itself faces the person, in update(); see Entity.setBillboard.
+		.billboard_mode = BM::BILLBOARD_DISABLED,
 		.flags = flags,
 		.albedo_texture_is_la8_font_atlas = p_is_la8_font_atlas,
 		.use_depth_postpass = true,
@@ -249,6 +247,7 @@ void LabelLoader::update(const ResourceLoaderSet &p_resource_loaders) {
 		godot::Label3D *node = nodes[idx];
 		ERR_FAIL_NULL(node);
 
+		node_entities[idx].entity.setBillboard(node->get_billboard_mode() != godot::BaseMaterial3D::BILLBOARD_DISABLED);
 		node_entities[idx].entity.clearChildren();
 		for (GodotRealityKit::Entity child : node_to_entities(node, meshes, materials, multimeshes)) {
 			node_entities[idx].entity.addChild(child);
