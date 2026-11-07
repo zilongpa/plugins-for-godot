@@ -600,7 +600,11 @@ void VisualProgramBuilder::finalize(ShaderMaterialDescription &p_desc, GodotReal
 
 	p_program.setCullMode(p_desc.render_mode.cull);
 
-	if (is_transparent) {
+	if (no_depth_test) {
+		// Ordered against the transparent models by render priority, as in BaseMaterialBuilder::finalize.
+		p_program.setSortOrder(p_desc.render_priority);
+		p_program.setSortGroup(1);
+	} else if (is_transparent) {
 		p_program.setSortOrder(p_desc.render_priority);
 		p_program.setSortGroup(p_desc.use_depth_postpass ? 2 : 1); // depth postPass vs. standard transparency
 	}

@@ -759,10 +759,15 @@ void BaseMaterialBuilder::finalize(const BaseMaterial3DDescription &p_descriptio
 
 	const bool no_depth_test = p_description.get_flag(BM::FLAG_DISABLE_DEPTH_TEST);
 	const bool is_transparent = p_description.is_transparent();
-	const int sort_order = -p_description.render_priority;
+	// RealityKit draws higher orders later, as Godot does higher render priorities.
+	const int sort_order = p_description.render_priority;
 	const bool is_billboard = p_description.billboard_mode != BM::BILLBOARD_DISABLED;
 	const float bounds_multiplier = is_billboard && !p_description.get_flag(BM::FLAG_BILLBOARD_KEEP_SCALE) ? 100.0f : 1.0f;
-	if (is_transparent) {
+	if (no_depth_test) {
+		// Godot draws these with the transparent materials. RealityKit orders entities only within a sort group,
+		// so they join the transparent models' group, to be ordered against them by render priority.
+		p_program.setSortGroup(1);
+	} else if (is_transparent) {
 		p_program.setSortGroup(p_description.use_depth_postpass ? 2 : 1); // depth postPass vs. standard transparency
 	}
 

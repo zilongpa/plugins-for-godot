@@ -101,6 +101,28 @@ ProgramDescription get_label_material_description(godot::Label3D *p_node, bool p
 	};
 }
 
+// Whether surface [p_surface] of a Label3D's mesh draws its outline, which has a render priority of its own.
+// The engine doesn't report a material's render priority, but Label3D colors the outline's vertices with
+// outline_modulate and the text's with modulate.
+static bool is_outline_surface(godot::Label3D *p_node, godot::RID p_mesh_rid, uint32_t p_surface) {
+	const godot::Color outline = p_node->get_outline_modulate();
+	if (p_node->get_outline_size() <= 0 || outline.a == 0.0f) {
+		return false;
+	}
+	const godot::Array arrays = rendering_server()->mesh_surface_get_arrays(p_mesh_rid, p_surface);
+	const godot::PackedColorArray colors = arrays[godot::Mesh::ARRAY_COLOR];
+	if (colors.is_empty()) {
+		return false;
+	}
+	// Colors may be stored at 8 bits per channel, so the nearer of the two is taken.
+	const godot::Color text = p_node->get_modulate();
+	const godot::Color color = colors[0];
+	const auto distance = [&](const godot::Color &p_other) {
+		return godot::Vector4(color.r - p_other.r, color.g - p_other.g, color.b - p_other.b, color.a - p_other.a).length_squared();
+	};
+	return distance(outline) < distance(text);
+}
+
 void LabelLoader::update_deps(
 		ResourceLoaderSet &p_resource_loaders) {
 	PROFILE_FUNC_SCOPE;
@@ -154,7 +176,8 @@ void LabelLoader::update_deps(
 		// We also mark the font atlas texture(s) for each material as dirty here too.
 		const uint32_t material_hash = godot::hash_fmix32(material_hash_state);
 		if (dep_states[idx].material_hash != material_hash || text_dirty) {
-			bool is_outline = false;
+			const godot::RID mesh_rid = node->get_base();
+			uint32_t surface_idx = 0;
 #if !TARGET_OS_SIMULATOR
 			godot::Ref<godot::TextServer> text_server =
 					godot::TextServerManager::get_singleton()->get_primary_interface();
@@ -171,10 +194,8 @@ void LabelLoader::update_deps(
 				is_la8_font_atlas = !is_msdf && albedo_texture_rid.is_valid() &&
 						rs->texture_get_format(albedo_texture_rid) == godot::Image::FORMAT_LA8;
 #endif
+				const bool is_outline = is_outline_surface(node, mesh_rid, surface_idx++);
 				ProgramDescription desc = get_label_material_description(node, is_outline, is_msdf, is_la8_font_atlas);
-				if (!is_outline) {
-					is_outline = true;
-				}
 
 				materials->set_description(material_idx, std::move(desc));
 				materials->mark_dirty(material_idx);
