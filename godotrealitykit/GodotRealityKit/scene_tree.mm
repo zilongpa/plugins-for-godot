@@ -369,7 +369,6 @@ void RealitySceneTree::_initialize() {
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
 
 	const bool controller_tracking_enabled = project_settings->get("xr/visionos/enable_controller_tracking");
-	const bool hand_tracking_enabled = project_settings->get("xr/visionos/enable_hand_tracking");
 
 	// A shared volume has no compositor services session, so the engine's ARKit-backed tracker
 	// can't run there. Publish the poses of the controllers' RealityKit accessory anchors
@@ -388,12 +387,11 @@ void RealitySceneTree::_initialize() {
 		controller_interface = accessory_interface;
 	}
 
-	// Both are immersive-only now that a shared volume tracks the controllers through their
-	// accessory anchors above.
+	// Immersive-only now that a shared volume tracks the controllers through their accessory
+	// anchors above. Hands are tracked by the immersive view itself (see HandAnchors).
 	const bool controllers_apply = controller_tracking_enabled && extension_settings.presentationStyle == kImmersive;
-	const bool hands_apply = hand_tracking_enabled && extension_settings.presentationStyle == kImmersive;
 
-	if (controllers_apply || hands_apply) {
+	if (controllers_apply) {
 		godot::Ref<godot::XRInterface> xr_interface = xr_server->find_interface("visionOS");
 		if (xr_interface.is_valid()) {
 			xr_interface->initialize();

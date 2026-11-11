@@ -401,6 +401,7 @@ struct ImmersiveRealityView : View {
     let delegate: GDRKBridgeDelegate?
     
     let state = ImmersiveRealityViewState()
+    let hands = HandAnchors()
 
     @State private var subscription: EventSubscription? = nil
 
@@ -431,6 +432,7 @@ struct ImmersiveRealityView : View {
             let worldTranslation = -worldScale * simd_act(worldRotation, xrOrigin.position)
             self.root.components.set(Transform(scale: worldScale, rotation: worldRotation, translation: worldTranslation))
         }
+        self.hands.update(root: self.root, delegate: self.delegate)
     }
 }
 

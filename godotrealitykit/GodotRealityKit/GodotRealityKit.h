@@ -207,6 +207,17 @@ public:
 	// As setControllerAnchor, for the controller's "aim" location.
 	void setControllerAim(ControllerHand p_hand, GDRKTransform p_transform, bool p_tracked) const;
 
+	// True when hand tracking is enabled and the presentation style is immersive, the only one in
+	// which visionOS lets ARKit track hands.
+	bool wantsHandTracking() const;
+
+	// Publish joint p_joint, an XRHandTracker::HandJoint, of a hand's skeleton, in scene-root-local
+	// space, on the engine's hand tracker for that hand ("/user/hand_tracker/left" or "right").
+	void setHandJoint(ControllerHand p_hand, int32_t p_joint, GDRKTransform p_transform) const;
+
+	// Mark whether a hand is tracked, once its joints for this frame are published.
+	void setHandTracked(ControllerHand p_hand, bool p_tracked) const;
+
 	// Sample a spatial controller's buttons / thumbstick and publish them on the shared-volume
 	// controller XR interface. p_gc_controller is the GCController as an opaque pointer. Ignored
 	// when that interface isn't running.

@@ -38,6 +38,7 @@
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/classes/xr_origin3d.hpp>
+#include <godot_cpp/classes/xr_hand_tracker.hpp>
 #include <godot_cpp/classes/xr_interface.hpp>
 #include <godot_cpp/classes/xr_server.hpp>
 
@@ -691,6 +692,51 @@ void GDRKBridgeDelegate::setControllerAim(ControllerHand p_hand, GDRKTransform p
 	for_each_tracker_set(window_id, xrOrigin(), p_transform, [&](uint64_t p_set, const godot::Transform3D &p_pose) {
 		controller_interface->set_aim_pose(p_set, tracker_hand(p_hand), p_pose, p_tracked);
 	});
+}
+
+bool GDRKBridgeDelegate::wantsHandTracking() const {
+	static const bool enabled = godot::ProjectSettings::get_singleton()->get_setting("xr/visionos/enable_hand_tracking", false);
+	return enabled && getExtensionSettings().presentationStyle == kImmersive;
+}
+
+// The engine's tracker for a hand, named as OpenXR's are, made the first time the hand is
+// published. The XRServer keeps it.
+static godot::XRHandTracker *hand_tracker(ControllerHand p_hand) {
+	static godot::XRHandTracker *trackers[2] = {};
+	godot::XRHandTracker *&tracker = trackers[p_hand == kLeftHand ? 0 : 1];
+	if (tracker == nullptr) {
+		godot::Ref<godot::XRHandTracker> made;
+		made.instantiate();
+		made->set_tracker_name(p_hand == kLeftHand ? "/user/hand_tracker/left" : "/user/hand_tracker/right");
+		made->set_tracker_hand(tracker_hand(p_hand));
+		made->set_hand_tracking_source(godot::XRHandTracker::HAND_TRACKING_SOURCE_UNOBSTRUCTED);
+		godot::XRServer::get_singleton()->add_tracker(made);
+		tracker = made.ptr();
+	}
+	return tracker;
+}
+
+void GDRKBridgeDelegate::setHandJoint(ControllerHand p_hand, int32_t p_joint, GDRKTransform p_transform) const {
+	godot::XRServer *xr_server = godot::XRServer::get_singleton();
+	ERR_FAIL_NULL(xr_server);
+	godot::Transform3D pose = to_tracker_pose(p_transform, xr_server->get_world_origin());
+	pose.basis.orthonormalize();
+
+	godot::XRHandTracker *tracker = hand_tracker(p_hand);
+	const auto joint = godot::XRHandTracker::HandJoint(p_joint);
+	tracker->set_hand_joint_transform(joint, pose);
+	tracker->set_hand_joint_flags(joint, godot::XRHandTracker::HAND_JOINT_FLAG_ORIENTATION_VALID | godot::XRHandTracker::HAND_JOINT_FLAG_ORIENTATION_TRACKED | godot::XRHandTracker::HAND_JOINT_FLAG_POSITION_VALID | godot::XRHandTracker::HAND_JOINT_FLAG_POSITION_TRACKED);
+	if (joint == godot::XRHandTracker::HAND_JOINT_PALM) {
+		tracker->set_pose("default", pose, godot::Vector3(), godot::Vector3(), godot::XRPose::XR_TRACKING_CONFIDENCE_HIGH);
+	}
+}
+
+void GDRKBridgeDelegate::setHandTracked(ControllerHand p_hand, bool p_tracked) const {
+	godot::XRHandTracker *tracker = hand_tracker(p_hand);
+	tracker->set_has_tracking_data(p_tracked);
+	if (!p_tracked) {
+		tracker->invalidate_pose("default");
+	}
 }
 
 void GDRKBridgeDelegate::setControllerInput(ControllerHand p_hand, void *p_gc_controller) const {
