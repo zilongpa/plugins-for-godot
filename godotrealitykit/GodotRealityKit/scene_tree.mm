@@ -100,13 +100,15 @@ void SceneLoader::initialize(godot::Node *p_node, GodotRealityKit::Entity p_enti
 }
 
 SceneLoader::~SceneLoader() {
+	// Deleted, not just freed: a Window's loader goes while the scene lives on, so the loaders
+	// must let go of the nodes and resources they follow.
 	if (nodes) {
-		memfree(nodes);
+		memdelete(nodes);
 	}
 
 	for_each_loader(resource_loaders, [](auto *&loader) {
 		if (loader) {
-			memfree(loader);
+			memdelete(loader);
 		}
 	});
 }

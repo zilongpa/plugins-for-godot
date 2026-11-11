@@ -119,9 +119,7 @@ uint32_t MeshLoader::find_or_add(godot::RID p_mesh_rid,
 	if (p_mesh) {
 		godot::Callable mesh_changed_callable =
 				callable_mp(this, &MeshLoader::mesh_changed).bind(mesh_rid_idx);
-		if (!p_mesh->is_connected("changed", mesh_changed_callable)) {
-			p_mesh->connect("changed", mesh_changed_callable);
-		}
+		connect_tracked(p_mesh, "changed", mesh_changed_callable);
 	}
 
 	uint64_t skeleton_id = 0;

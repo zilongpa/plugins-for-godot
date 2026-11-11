@@ -25,8 +25,8 @@ uint32_t SkeletonLoader::find_or_add(uint64_t p_skeleton_id, godot::Skeleton3D *
 
 	godot::Callable pose_updated_callable =
 			callable_mp(this, &SkeletonLoader::_update_snapshot).bind(idx);
-	if (p_skeleton && !p_skeleton->is_connected("pose_updated", pose_updated_callable)) {
-		p_skeleton->connect("pose_updated", pose_updated_callable);
+	if (p_skeleton) {
+		connect_tracked(p_skeleton, "pose_updated", pose_updated_callable);
 	}
 
 	return idx;
@@ -41,9 +41,7 @@ void SkeletonLoader::add_skeleton_modifier(godot::SkeletonModifier3D *p_skeleton
 	const uint32_t idx = find_or_add(skeleton->get_instance_id(), skeleton);
 	godot::Callable modification_processed_callable =
 			callable_mp(this, &SkeletonLoader::_update_snapshot).bind(idx);
-	if (!p_skeleton_modifier->is_connected("modification_processed", modification_processed_callable)) {
-		p_skeleton_modifier->connect("modification_processed", modification_processed_callable);
-	}
+	connect_tracked(p_skeleton_modifier, "modification_processed", modification_processed_callable);
 }
 
 void SkeletonLoader::remove(uint32_t p_idx) {

@@ -119,6 +119,24 @@ class ResourceLoader : public ObjectLoader<Derived>, public godot::Object {
 public:
 	static inline uint32_t max_resources_per_update = 100;
 
+	// A loader can go before the resources it follows, as when its Window closes: they must not
+	// call it after.
+	~ResourceLoader() {
+		for (const TrackedConnection &connection : tracked_connections) {
+			godot::Object *object = godot::ObjectDB::get_instance(connection.object);
+			if (object && object->is_connected(connection.signal, connection.callable)) {
+				object->disconnect(connection.signal, connection.callable);
+			}
+		}
+		for (uint32_t idx = 0; idx < resource_changed_objects.size(); idx++) {
+			if (godot::Object *resource = godot::ObjectDB::get_instance(resource_changed_objects[idx])) {
+				if (resource->is_connected("changed", resource_changed_callables[idx])) {
+					resource->disconnect("changed", resource_changed_callables[idx]);
+				}
+			}
+		}
+	}
+
 	template <std::invocable<uint32_t> Fn>
 	bool for_each_dirty_throttled(const Fn &fn) {
 		const bool finished = ObjectLoader<Derived>::dirty_idxs.for_each_n([&](uint32_t idx) {
@@ -135,6 +153,7 @@ public:
 	void _reserve(uint32_t p_capacity) {
 		ObjectLoader<Derived>::_reserve(p_capacity);
 		resource_changed_callables.resize(p_capacity);
+		resource_changed_objects.resize(p_capacity);
 		used_in_frame.resize(p_capacity);
 		changed_in_frame.resize(p_capacity);
 
@@ -221,10 +240,21 @@ protected:
 				callable_mp(static_cast<Derived *>(this), static_cast<void (Derived::*)(uint32_t)>(&Derived::changed)).bind(p_idx);
 		p_resource->connect("changed", changed_callable);
 		resource_changed_callables[p_idx] = std::move(changed_callable);
+		resource_changed_objects[p_idx] = godot::ObjectID(p_resource->get_instance_id());
+	}
+
+	// Connects p_callable, a method of this loader, to p_object's p_signal until either goes.
+	void connect_tracked(godot::Object *p_object, const godot::StringName &p_signal, const godot::Callable &p_callable) {
+		if (p_object->is_connected(p_signal, p_callable)) {
+			return;
+		}
+		p_object->connect(p_signal, p_callable);
+		tracked_connections.push_back(TrackedConnection{ godot::ObjectID(p_object->get_instance_id()), p_signal, p_callable });
 	}
 
 	void disconnect_changed(godot::Resource *p_resource, uint32_t p_idx) {
 		p_resource->disconnect("changed", resource_changed_callables[p_idx]);
+		resource_changed_objects[p_idx] = godot::ObjectID();
 	}
 
 	void changed(uint32_t p_idx) {
@@ -278,6 +308,14 @@ protected:
 
 private:
 	godot::LocalVector<godot::Callable> resource_changed_callables;
+	// The resource each callable is connected to, while it is.
+	godot::LocalVector<godot::ObjectID> resource_changed_objects;
+	struct TrackedConnection {
+		godot::ObjectID object;
+		godot::StringName signal;
+		godot::Callable callable;
+	};
+	godot::LocalVector<TrackedConnection> tracked_connections;
 	godot::LocalVector<uint32_t> resource_ref_counts;
 	godot::LocalVector<uint32_t> remove_queue;
 	LocalBitVector used_in_frame;
