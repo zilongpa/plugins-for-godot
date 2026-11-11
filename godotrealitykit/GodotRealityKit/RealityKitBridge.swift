@@ -402,6 +402,8 @@ struct ImmersiveRealityView : View {
     
     let state = ImmersiveRealityViewState()
     let hands = HandAnchors()
+    // Tracks spatial controllers when the immersive space is a Window's, in the 2D Window style.
+    let accessories = AccessoryAnchors()
 
     @State private var subscription: EventSubscription? = nil
 
@@ -411,6 +413,7 @@ struct ImmersiveRealityView : View {
         GeometryReader3D{ proxy in
             RealityView(make: { content in
                 content.add(self.root)
+                content.add(self.accessories.container)
                 self.subscription = content.subscribe(to: SceneEvents.Update.self, self.onSceneUpdate)
             }, update: { content in
             })
@@ -433,6 +436,7 @@ struct ImmersiveRealityView : View {
             self.root.components.set(Transform(scale: worldScale, rotation: worldRotation, translation: worldTranslation))
         }
         self.hands.update(root: self.root, delegate: self.delegate)
+        self.accessories.update(root: self.root, delegate: self.delegate)
     }
 }
 

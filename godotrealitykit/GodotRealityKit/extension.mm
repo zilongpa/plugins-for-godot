@@ -587,12 +587,14 @@ void GDRKBridgeDelegate::cancelSpatialPress(int64_t p_event_id) const {
 	}
 }
 
+static godot::Transform3D tracking_origin(godot::XROrigin3D *p_origin);
+
 GDRKTransform GDRKBridgeDelegate::getXROrigin() const {
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
 	ERR_FAIL_NULL_V(xr_server, GDRKTransform::identity);
 
 	const float inv_world_scale = 1.0f / xr_server->get_world_scale();
-	const godot::Transform3D world_origin = xr_server->get_world_origin();
+	const godot::Transform3D world_origin = tracking_origin(xrOrigin());
 	return GDRKTransform{
 		.scale = simd_make_float3(inv_world_scale, inv_world_scale, inv_world_scale),
 		.position = gdrk::to_simd3(world_origin.get_origin()),
@@ -623,6 +625,16 @@ static godot::XROrigin3D *find_xr_origin(godot::Node *p_node) {
 godot::XROrigin3D *GDRKBridgeDelegate::xrOrigin() const {
 	gdrk::SceneLoader *loader = window_id ? resolve_loader() : nullptr;
 	return loader ? find_xr_origin(loader->get_root_node()) : nullptr;
+}
+
+// Where the person's space sits in a view's world: its Window's XROrigin3D when it holds one,
+// else the XRServer's current origin.
+static godot::Transform3D tracking_origin(godot::XROrigin3D *p_origin) {
+	if (godot::XROrigin3D *origin = p_origin) {
+		return origin->get_global_transform().orthonormalized();
+	}
+	godot::XRServer *xr_server = godot::XRServer::get_singleton();
+	return xr_server ? xr_server->get_world_origin() : godot::Transform3D();
 }
 
 bool GDRKBridgeDelegate::wantsControllerAnchors() const {
@@ -696,7 +708,13 @@ void GDRKBridgeDelegate::setControllerAim(ControllerHand p_hand, GDRKTransform p
 
 bool GDRKBridgeDelegate::wantsHandTracking() const {
 	static const bool enabled = godot::ProjectSettings::get_singleton()->get_setting("xr/visionos/enable_hand_tracking", false);
-	return enabled && getExtensionSettings().presentationStyle == kImmersive;
+	if (!enabled) {
+		return false;
+	}
+	if (window_id) {
+		return gdrk::WindowHosts::get_singleton()->style_of(window_id) == gdrk::WindowHosts::STYLE_IMMERSIVE;
+	}
+	return getExtensionSettings().presentationStyle == kImmersive;
 }
 
 // The engine's tracker for a hand, named as OpenXR's are, made the first time the hand is
@@ -719,7 +737,7 @@ static godot::XRHandTracker *hand_tracker(ControllerHand p_hand) {
 void GDRKBridgeDelegate::setHandJoint(ControllerHand p_hand, int32_t p_joint, GDRKTransform p_transform) const {
 	godot::XRServer *xr_server = godot::XRServer::get_singleton();
 	ERR_FAIL_NULL(xr_server);
-	godot::Transform3D pose = to_tracker_pose(p_transform, xr_server->get_world_origin());
+	godot::Transform3D pose = to_tracker_pose(p_transform, tracking_origin(xrOrigin()));
 	pose.basis.orthonormalize();
 
 	godot::XRHandTracker *tracker = hand_tracker(p_hand);

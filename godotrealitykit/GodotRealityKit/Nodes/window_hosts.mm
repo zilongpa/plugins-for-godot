@@ -20,6 +20,7 @@
 
 #include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/xr_camera3d.hpp>
 #include <godot_cpp/core/object.hpp>
 
 #if TARGET_OS_XR
@@ -30,6 +31,7 @@
 typedef NS_ENUM(NSInteger, GDTWindowStyle) {
 	GDTWindowStylePlain = 0,
 	GDTWindowStyleVolumetric,
+	GDTWindowStyleImmersive,
 };
 
 typedef struct {
@@ -60,7 +62,14 @@ typedef struct {
 }
 
 - (GDTWindowStyle)styleForWindow:(uint64_t)windowID {
-	return gdrk::WindowHosts::get_singleton()->is_volumetric(windowID) ? GDTWindowStyleVolumetric : GDTWindowStylePlain;
+	switch (gdrk::WindowHosts::get_singleton()->style_of(windowID)) {
+		case gdrk::WindowHosts::STYLE_VOLUME:
+			return GDTWindowStyleVolumetric;
+		case gdrk::WindowHosts::STYLE_IMMERSIVE:
+			return GDTWindowStyleImmersive;
+		default:
+			return GDTWindowStylePlain;
+	}
 }
 
 - (GDTVolumeSize)volumeSizeForWindow:(uint64_t)windowID {
@@ -116,13 +125,20 @@ void WindowHosts::finalize() {
 
 // MARK: Ownership
 
+// The cameras that open their Window in RealityKit: as a volume, a portal, or the immersive
+// space, for an XRCamera3D, which stands for the person's head.
+static bool is_window_camera(godot::Node *p_node) {
+	return godot::Object::cast_to<RealityVolumeCamera3D>(p_node) || godot::Object::cast_to<RealityPortalCamera3D>(p_node) ||
+			godot::Object::cast_to<godot::XRCamera3D>(p_node);
+}
+
 static godot::Node3D *find_camera_in(godot::Node *p_node) {
 	for (int i = 0; i < p_node->get_child_count(); i++) {
 		godot::Node *child = p_node->get_child(i);
 		if (godot::Object::cast_to<godot::Window>(child)) {
 			continue;
 		}
-		if (godot::Object::cast_to<RealityVolumeCamera3D>(child) || godot::Object::cast_to<RealityPortalCamera3D>(child)) {
+		if (is_window_camera(child)) {
 			return godot::Object::cast_to<godot::Node3D>(child);
 		}
 		if (godot::Node3D *camera = find_camera_in(child)) {
@@ -186,8 +202,7 @@ SceneLoader *WindowHosts::loader_of_window(uint64_t p_window_id) const {
 }
 
 void WindowHosts::node_added(godot::Node *p_node) {
-	if (godot::Object::cast_to<godot::Window>(p_node) || godot::Object::cast_to<RealityVolumeCamera3D>(p_node) ||
-			godot::Object::cast_to<RealityPortalCamera3D>(p_node)) {
+	if (godot::Object::cast_to<godot::Window>(p_node) || is_window_camera(p_node)) {
 		host_window_cache.clear();
 	}
 	if (SceneLoader *loader = loader_for(p_node)) {
@@ -199,8 +214,7 @@ void WindowHosts::node_removed(godot::Node *p_node) {
 	if (SceneLoader *loader = loader_for(p_node)) {
 		loader->get_nodes()->node_removed(p_node);
 	}
-	if (godot::Object::cast_to<godot::Window>(p_node) || godot::Object::cast_to<RealityVolumeCamera3D>(p_node) ||
-			godot::Object::cast_to<RealityPortalCamera3D>(p_node)) {
+	if (godot::Object::cast_to<godot::Window>(p_node) || is_window_camera(p_node)) {
 		host_window_cache.clear();
 	}
 }
@@ -252,7 +266,10 @@ bool WindowHosts::provides_content(uint64_t p_window_id) {
 
 	Host host;
 	host.window = godot::ObjectID(window->get_instance_id());
-	host.volumetric = godot::Object::cast_to<RealityVolumeCamera3D>(find_window_camera(window)) != nullptr;
+	godot::Node3D *camera = find_window_camera(window);
+	host.style = godot::Object::cast_to<RealityVolumeCamera3D>(camera) ? STYLE_VOLUME
+			: godot::Object::cast_to<RealityPortalCamera3D>(camera)	   ? STYLE_PORTAL
+																	   : STYLE_IMMERSIVE;
 	host.root = GodotRealityKit::Entity::initAndMaterialize();
 	host.loader = memnew(SceneLoader);
 	host.loader->initialize(window, host.root);
@@ -265,9 +282,18 @@ bool WindowHosts::provides_content(uint64_t p_window_id) {
 	return true;
 }
 
-bool WindowHosts::is_volumetric(uint64_t p_window_id) const {
+WindowHosts::Style WindowHosts::style_of(uint64_t p_window_id) const {
 	auto found = hosts.find(p_window_id);
-	return found != hosts.end() && found->second.volumetric;
+	return found != hosts.end() ? found->second.style : STYLE_NONE;
+}
+
+bool WindowHosts::is_immersive_open() const {
+	for (const auto &[window_id, host] : hosts) {
+		if (host.style == STYLE_IMMERSIVE) {
+			return true;
+		}
+	}
+	return false;
 }
 
 godot::Vector3 WindowHosts::volume_size(uint64_t p_window_id) {
@@ -288,8 +314,11 @@ void *WindowHosts::make_content(uint64_t p_window_id) {
 	if (!window) {
 		return nullptr;
 	}
-	if (!host.volumetric) {
+	if (host.style == STYLE_PORTAL) {
 		return GodotRealityKit::WindowContent::makePortal(host.root, *host.delegate);
+	}
+	if (host.style == STYLE_IMMERSIVE) {
+		return GodotRealityKit::WindowContent::makeImmersive(host.root, *host.delegate);
 	}
 	RealityVolumeCamera3D *camera = godot::Object::cast_to<RealityVolumeCamera3D>(find_window_camera(window));
 	const GDRKVolumeSize size = {

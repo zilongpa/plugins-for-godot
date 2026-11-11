@@ -27,11 +27,20 @@ class SceneLoader;
 class RealityPortalCamera3D;
 
 // Godot Windows that hold a RealityVolumeCamera3D or a RealityPortalCamera3D
-// open as RealityKit volumes or portal windows. The engine presents them like
-// its other native windows; each has its own scene loader for the Window's
-// subtree, while the rest of the scene stays with the main loader, if any.
+// open as RealityKit volumes or portal windows, and a Window that holds an
+// XRCamera3D opens as the app's immersive space, around the person. The engine
+// presents them like its other native windows; each has its own scene loader
+// for the Window's subtree, while the rest of the scene stays with the main
+// loader, if any.
 class WindowHosts {
 public:
+	enum Style {
+		STYLE_NONE,
+		STYLE_VOLUME,
+		STYLE_PORTAL,
+		STYLE_IMMERSIVE,
+	};
+
 	static WindowHosts *get_singleton();
 
 	// Provides the content of these windows to the engine (visionOS only).
@@ -55,7 +64,9 @@ public:
 
 	// Engine callbacks, on the main thread.
 	bool provides_content(uint64_t p_window_id);
-	bool is_volumetric(uint64_t p_window_id) const;
+	Style style_of(uint64_t p_window_id) const;
+	// Whether a Window is open as the immersive space.
+	bool is_immersive_open() const;
 	godot::Vector3 volume_size(uint64_t p_window_id);
 	void *make_content(uint64_t p_window_id);
 	void window_closed(uint64_t p_window_id);
@@ -66,7 +77,7 @@ private:
 		SceneLoader *loader = nullptr;
 		GDRKBridgeDelegate *delegate = nullptr;
 		GodotRealityKit::Entity root = GodotRealityKit::Entity::init();
-		bool volumetric = true;
+		Style style = STYLE_VOLUME;
 	};
 
 	Host *host_of_window(godot::Window *p_window);

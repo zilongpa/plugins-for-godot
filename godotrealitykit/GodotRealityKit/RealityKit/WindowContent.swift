@@ -14,7 +14,7 @@
 import RealityKit
 import SwiftUI
 
-/// The content of a Godot Window that opens as a volume or a portal window.
+/// The content of a Godot Window that opens as a volume, a portal window or the immersive space.
 /// The engine presents it in its own window scene; see WindowHosts.
 public enum WindowContent {
     /// A volume showing `root`, sized in meters. Zero components of the
@@ -25,6 +25,15 @@ public enum WindowContent {
             let view = AnyView(SharedVolumetricRealityView(root: root.value, delegate: delegate)
                 .modifier(VolumeMeasurement(delegate: delegate))
                 .modifier(frame))
+            return Unmanaged.passRetained(view as AnyObject).toOpaque()
+        }
+    }
+
+    /// The immersive space, showing `root` around the person, placed by the Window's
+    /// XROrigin3D. Returns a retained AnyView.
+    public static func makeImmersive(root: Entity, delegate: GDRKBridgeDelegate) -> UnsafeMutableRawPointer {
+        assumeMainActor(root, delegate) { root, delegate in
+            let view = AnyView(ImmersiveRealityView(root: root.value, delegate: delegate))
             return Unmanaged.passRetained(view as AnyObject).toOpaque()
         }
     }
