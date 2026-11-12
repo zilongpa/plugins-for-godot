@@ -50,7 +50,7 @@ protected:
 
 		godot::ClassDB::bind_method(godot::D_METHOD("get_chirality"), &InputEventSpatialTouch::get_chirality);
 		godot::ClassDB::bind_method(godot::D_METHOD("set_chirality", "chirality"), &InputEventSpatialTouch::set_chirality);
-		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::VECTOR3, "chirality"), "set_chirality", "get_chirality");
+		ADD_PROPERTY(godot::PropertyInfo(godot::Variant::INT, "chirality"), "set_chirality", "get_chirality");
 
 		BIND_ENUM_CONSTANT(FLAG_HAS_SELECTION_RAY);
 		BIND_ENUM_CONSTANT(FLAG_HAS_INPUT_DEVICE_POSE);
