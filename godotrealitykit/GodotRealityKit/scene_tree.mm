@@ -74,6 +74,7 @@ void SceneLoader::initialize(godot::Node *p_node, GodotRealityKit::Entity p_enti
 	root_node = p_node;
 	root_entity = p_entity;
 	active_presses.fill(-1);
+	ended_presses.fill(-1);
 
 	const uint32_t frame_delay = rendering_device()->get_frame_delay();
 	command_buffers.resize(frame_delay);

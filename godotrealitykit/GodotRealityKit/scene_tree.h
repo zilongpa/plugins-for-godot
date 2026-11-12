@@ -123,6 +123,11 @@ private:
 	// The object each press began on, which its cancellation goes to.
 	mutable std::array<ColliderInputEventParams, max_active_presses> active_press_targets = {};
 	mutable uint32_t next_active_press_idx = 0;
+	// Presses that ended lately: SwiftUI reports a touch's end again when
+	// the whole gesture ends, after one hand let go before the other.
+	static constexpr uint32_t ended_press_count = 8;
+	mutable std::array<int64_t, ended_press_count> ended_presses;
+	mutable uint32_t next_ended_press_idx = 0;
 
 	std::optional<std::function<void()>> on_next_frame_completion;
 	bool loading_in_progress = false;

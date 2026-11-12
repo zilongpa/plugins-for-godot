@@ -9,6 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cstring>
 #include <type_traits>
 
@@ -461,6 +462,9 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 	if (!loader) {
 		return;
 	}
+	if (p_ended && std::find(loader->ended_presses.begin(), loader->ended_presses.end(), p_event_id) != loader->ended_presses.end()) {
+		return;
+	}
 	uint32_t cur_press_idx = 0;
 	bool is_first_press = true;
 	for (uint32_t press_idx = 0; press_idx < loader->max_active_presses; press_idx++) {
@@ -578,6 +582,8 @@ void GDRKBridgeDelegate::onEntityPressUpdate(int64_t p_event_id,
 	if (p_ended) {
 		loader->active_presses[cur_press_idx] = -1;
 		loader->active_press_targets[cur_press_idx] = {};
+		loader->ended_presses[loader->next_ended_press_idx] = p_event_id;
+		loader->next_ended_press_idx = (loader->next_ended_press_idx + 1) % loader->ended_press_count;
 	}
 }
 

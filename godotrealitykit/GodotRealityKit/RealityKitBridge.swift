@@ -232,8 +232,11 @@ extension RealityView {
                 let events = value.gestureValue
 #endif
 
+                // One touch can end while another goes on: the gesture
+                // carries on, and that touch's end arrives here, not in
+                // onEnded.
                 for event in events {
-                    self.handleEvent(event: event, value: value, delegate: delegate, root: root, size: size, ended: false)
+                    self.handleEvent(event: event, value: value, delegate: delegate, root: root, size: size, ended: event.phase != .active)
                 }
             }
             .onEnded{ value in
