@@ -20,11 +20,15 @@ import RealityKit
 /// session, since the hands are the person's whichever Window shows the space.
 @MainActor
 final class HandAnchors {
-    /// The session and its provider. A provider that has stopped, as when the immersive space
-    /// closes, can't run again: the next update starts a new one.
+    /// The session and its provider. A provider that isn't running a while after it was
+    /// started, as when the immersive space closed under it, is replaced: one that has
+    /// stopped can't run again.
     private static var session = ARKitSession()
     private static var provider = HandTrackingProvider()
     private static var starting = false
+    /// When the provider was last started, and how long to give it to run before trying again.
+    private static var startedAt = Date.distantPast
+    private static let startTimeout: TimeInterval = 1
 
     /// ARKit's joints, each with the XRHandTracker.HandJoint it stands for. ARKit has no palm
     /// joint: the palm is taken halfway along the middle finger's metacarpal.
@@ -47,7 +51,12 @@ final class HandAnchors {
     func update(root: RealityKit.Entity, delegate: GDRKBridgeDelegate?) {
         guard let delegate, delegate.wantsHandTracking(), HandTrackingProvider.isSupported else { return }
         Self.startIfNeeded()
-        guard Self.provider.state == .running else { return }
+        guard Self.provider.state == .running else {
+            // No current joints: don't leave the last ones looking tracked.
+            delegate.setHandTracked(.leftHand, false)
+            delegate.setHandTracked(.rightHand, false)
+            return
+        }
 
         let rootFromOrigin = root.transformMatrix(relativeTo: nil).inverse
         let latest = Self.provider.latestAnchors
@@ -80,12 +89,15 @@ final class HandAnchors {
     }
 
     private static func startIfNeeded() {
-        guard !starting, provider.state == .initialized || provider.state == .stopped else { return }
-        if provider.state == .stopped {
+        guard !starting, provider.state != .running, Date().timeIntervalSince(startedAt) > startTimeout else { return }
+        if provider.state != .initialized {
+            NSLog("[GDRK] hand tracking is \(provider.state); starting it again")
+            session.stop()
             session = ARKitSession()
             provider = HandTrackingProvider()
         }
         starting = true
+        startedAt = Date()
         let session = session
         let provider = provider
         Task { @MainActor in
