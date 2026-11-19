@@ -16,12 +16,15 @@ import RealityKit
 
 /// Tracks the person's hands in the immersive space, the only place visionOS lets ARKit track
 /// them, and publishes each hand's joints to the engine's hand trackers (see
-/// GDRKBridgeDelegate::setHandJoint). The immersive view holds one.
+/// GDRKBridgeDelegate::setHandJoint). Each immersive view holds one; they share one ARKit
+/// session, since the hands are the person's whichever Window shows the space.
 @MainActor
 final class HandAnchors {
-    private let session = ARKitSession()
-    private let provider = HandTrackingProvider()
-    private var started = false
+    /// The session and its provider. A provider that has stopped, as when the immersive space
+    /// closes, can't run again: the next update starts a new one.
+    private static var session = ARKitSession()
+    private static var provider = HandTrackingProvider()
+    private static var starting = false
 
     /// ARKit's joints, each with the XRHandTracker.HandJoint it stands for. ARKit has no palm
     /// joint: the palm is taken halfway along the middle finger's metacarpal.
@@ -43,11 +46,11 @@ final class HandAnchors {
     /// per scene update.
     func update(root: RealityKit.Entity, delegate: GDRKBridgeDelegate?) {
         guard let delegate, delegate.wantsHandTracking(), HandTrackingProvider.isSupported else { return }
-        startIfNeeded()
-        guard provider.state == .running else { return }
+        Self.startIfNeeded()
+        guard Self.provider.state == .running else { return }
 
         let rootFromOrigin = root.transformMatrix(relativeTo: nil).inverse
-        let latest = provider.latestAnchors
+        let latest = Self.provider.latestAnchors
         publish(latest.leftHand, as: .leftHand, rootFromOrigin: rootFromOrigin, delegate: delegate)
         publish(latest.rightHand, as: .rightHand, rootFromOrigin: rootFromOrigin, delegate: delegate)
     }
@@ -76,16 +79,23 @@ final class HandAnchors {
         return GDRKTransform(scale: t.scale, position: t.translation, orientation: t.rotation)
     }
 
-    private func startIfNeeded() {
-        guard !started else { return }
-        started = true
+    private static func startIfNeeded() {
+        guard !starting, provider.state == .initialized || provider.state == .stopped else { return }
+        if provider.state == .stopped {
+            session = ARKitSession()
+            provider = HandTrackingProvider()
+        }
+        starting = true
+        let session = session
+        let provider = provider
         Task { @MainActor in
             do {
-                try await self.session.run([self.provider])
+                try await session.run([provider])
                 NSLog("[GDRK] hand tracking started")
             } catch {
                 NSLog("[GDRK] hand tracking unavailable: \(error)")
             }
+            Self.starting = false
         }
     }
 }

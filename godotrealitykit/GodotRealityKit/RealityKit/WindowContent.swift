@@ -33,7 +33,10 @@ public enum WindowContent {
     /// XROrigin3D. Returns a retained AnyView.
     public static func makeImmersive(root: Entity, delegate: GDRKBridgeDelegate) -> UnsafeMutableRawPointer {
         assumeMainActor(root, delegate) { root, delegate in
-            let view = AnyView(ImmersiveRealityView(root: root.value, delegate: delegate))
+            // Each Window's own view: the space keeps its view as it passes from one Window
+            // to another, which would keep the first Window's root and delegate.
+            let view = AnyView(ImmersiveRealityView(root: root.value, delegate: delegate)
+                .id(ObjectIdentifier(root.value)))
             return Unmanaged.passRetained(view as AnyObject).toOpaque()
         }
     }
